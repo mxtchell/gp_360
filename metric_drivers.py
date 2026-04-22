@@ -1346,8 +1346,8 @@ def metric_drivers(parameters: SkillInput):
 
     top_n = int(getattr(parameters.arguments, 'top_n', 10) or 10)
     other_filters = getattr(parameters.arguments, 'other_filters', [])
-    max_prompt = parameters.arguments.max_prompt if hasattr(parameters.arguments, 'max_prompt') and parameters.arguments.max_prompt else DEFAULT_MAX_PROMPT
-    insight_prompt = parameters.arguments.insight_prompt if hasattr(parameters.arguments, 'insight_prompt') and parameters.arguments.insight_prompt else DEFAULT_INSIGHT_PROMPT
+    max_prompt = parameters.arguments.max_prompt
+    insight_prompt = parameters.arguments.insight_prompt
     table_name = getattr(parameters.arguments, 'table_name', None)
     if table_name == "":
         table_name = None

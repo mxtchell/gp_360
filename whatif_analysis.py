@@ -18,6 +18,28 @@ from skill_framework.layouts import wire_layout
 
 logger = logging.getLogger(__name__)
 
+# Default prompts
+DEFAULT_INSIGHT_PROMPT = """
+Analyze the following COGS what-if scenario results:
+
+Scenario: {{ facts[0].scenario }}
+Breakout by: {{ facts[0].breakout }}
+
+{% for row in facts[0].results %}
+- {{ row }}
+{% endfor %}
+
+Provide a brief analysis covering:
+1. Overall COGS impact magnitude and direction across categories
+2. Which categories are most/least affected and why
+3. Which cost components drive the largest changes
+4. Business implications and recommended actions
+
+Use a professional finance tone. Be concise (3-4 sentences).
+"""
+
+DEFAULT_MAX_PROMPT = DEFAULT_INSIGHT_PROMPT
+
 # Import layout at the end to avoid circular dependency
 WHATIF_LAYOUT = """{
     "layoutJson": {
@@ -284,13 +306,13 @@ PRICE_COL_MAPPING = {
             name="max_prompt",
             parameter_type="prompt",
             description="Prompt being used for max response.",
-            default_value=""
+            default_value=DEFAULT_MAX_PROMPT
         ),
         SkillParameter(
             name="insight_prompt",
             parameter_type="prompt",
             description="Prompt being used for detailed insights.",
-            default_value=""
+            default_value=DEFAULT_INSIGHT_PROMPT
         )
     ]
 )
@@ -383,29 +405,9 @@ def whatif_analysis(parameters: SkillInput):
         'results': results_df.to_dict(orient='records')
     }]
 
-    # Use insight_prompt from platform if provided
-    insight_prompt_template = parameters.arguments.insight_prompt if hasattr(parameters.arguments, 'insight_prompt') and parameters.arguments.insight_prompt else """
-Analyze the following COGS what-if scenario results:
-
-Scenario: {{ facts[0].scenario }}
-Breakout by: {{ facts[0].breakout }}
-
-{% for row in facts[0].results %}
-- {{ row }}
-{% endfor %}
-
-Provide a brief analysis covering:
-1. Overall COGS impact magnitude and direction across categories
-2. Which categories are most/least affected and why
-3. Which cost components drive the largest changes
-4. Business implications and recommended actions
-
-Use a professional finance tone. Be concise (3-4 sentences).
-"""
-
-    insight_prompt_rendered = jinja2.Template(insight_prompt_template).render(facts=facts)
-    max_prompt_template = parameters.arguments.max_prompt if hasattr(parameters.arguments, 'max_prompt') and parameters.arguments.max_prompt else insight_prompt_template
-    max_response_prompt = jinja2.Template(max_prompt_template).render(facts=facts)
+    # Use prompts from platform
+    insight_prompt_rendered = jinja2.Template(parameters.arguments.insight_prompt).render(facts=facts)
+    max_response_prompt = jinja2.Template(parameters.arguments.max_prompt).render(facts=facts)
 
     insights = ar_utils.get_llm_response(insight_prompt_rendered)
 

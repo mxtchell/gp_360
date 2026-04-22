@@ -752,13 +752,13 @@ class TrendAnalysis:
             name="max_prompt",
             parameter_type="prompt",
             description="Prompt for executive summary",
-            default_value=""
+            default_value=DEFAULT_MAX_PROMPT
         ),
         SkillParameter(
             name="insight_prompt",
             parameter_type="prompt",
             description="Prompt for detailed insights",
-            default_value=""
+            default_value=DEFAULT_INSIGHT_PROMPT
         ),
         SkillParameter(
             name="chart_viz_layout",
@@ -792,9 +792,9 @@ def trend(parameters: SkillInput):
     if table_name == "":
         table_name = None
 
-    # Get prompts from platform or use defaults
-    max_prompt = parameters.arguments.max_prompt if hasattr(parameters.arguments, 'max_prompt') and parameters.arguments.max_prompt else DEFAULT_MAX_PROMPT
-    insight_prompt = parameters.arguments.insight_prompt if hasattr(parameters.arguments, 'insight_prompt') and parameters.arguments.insight_prompt else DEFAULT_INSIGHT_PROMPT
+    # Get prompts from platform
+    max_prompt = parameters.arguments.max_prompt
+    insight_prompt = parameters.arguments.insight_prompt
     viz_layout = getattr(parameters.arguments, 'chart_viz_layout', TREND_CHART_LAYOUT)
 
     # Validate required parameters
