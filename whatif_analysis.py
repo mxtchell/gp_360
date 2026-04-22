@@ -5,6 +5,7 @@ import logging
 import pandas as pd
 import numpy as np
 
+import jinja2
 from ar_analytics import ArUtils
 from ar_analytics.helpers.utils import get_dataset_id
 from answer_rocket import AnswerRocketClient
@@ -278,6 +279,18 @@ PRICE_COL_MAPPING = {
             parameter_type="code",
             description="Table/view name for COGS data query",
             default_value=""
+        ),
+        SkillParameter(
+            name="max_prompt",
+            parameter_type="prompt",
+            description="Prompt being used for max response.",
+            default_value=""
+        ),
+        SkillParameter(
+            name="insight_prompt",
+            parameter_type="prompt",
+            description="Prompt being used for detailed insights.",
+            default_value=""
         )
     ]
 )
@@ -362,14 +375,24 @@ def whatif_analysis(parameters: SkillInput):
 
     # Generate insights using LLM
     ar_utils = ArUtils()
-    insight_prompt = f"""
+
+    # Build facts for prompt template
+    facts = [{
+        'scenario': ', '.join([f'{k}: {v:+.1%}' for k, v in price_scenario.items()]),
+        'breakout': breakout,
+        'results': results_df.to_dict(orient='records')
+    }]
+
+    # Use insight_prompt from platform if provided
+    insight_prompt_template = parameters.arguments.insight_prompt if hasattr(parameters.arguments, 'insight_prompt') and parameters.arguments.insight_prompt else """
 Analyze the following COGS what-if scenario results:
 
-Scenario: {', '.join([f'{k}: {v:+.1%}' for k, v in price_scenario.items()])}
-Breakout by: {breakout}
+Scenario: {{ facts[0].scenario }}
+Breakout by: {{ facts[0].breakout }}
 
-Results summary:
-{results_df.to_string()}
+{% for row in facts[0].results %}
+- {{ row }}
+{% endfor %}
 
 Provide a brief analysis covering:
 1. Overall COGS impact magnitude and direction across categories
@@ -380,7 +403,11 @@ Provide a brief analysis covering:
 Use a professional finance tone. Be concise (3-4 sentences).
 """
 
-    insights = ar_utils.get_llm_response(insight_prompt)
+    insight_prompt_rendered = jinja2.Template(insight_prompt_template).render(facts=facts)
+    max_prompt_template = parameters.arguments.max_prompt if hasattr(parameters.arguments, 'max_prompt') and parameters.arguments.max_prompt else insight_prompt_template
+    max_response_prompt = jinja2.Template(max_prompt_template).render(facts=facts)
+
+    insights = ar_utils.get_llm_response(insight_prompt_rendered)
 
     # Prepare layout variables
     layout_vars = {
@@ -416,7 +443,7 @@ Use a professional finance tone. Be concise (3-4 sentences).
         param_info.append(ParameterDisplayDescription(key="", value=f"{k}: {formatted_val}"))
 
     return SkillOutput(
-        final_prompt=insight_prompt,
+        final_prompt=max_response_prompt,
         narrative=insights,
         visualizations=[SkillVisualization(title="COGS What-If Analysis", layout=rendered)],
         parameter_display_descriptions=param_info,

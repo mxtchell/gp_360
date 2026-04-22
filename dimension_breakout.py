@@ -819,8 +819,8 @@ def dimension_breakout(parameters: SkillInput):
     other_filters = getattr(parameters.arguments, 'other_filters', [])
     top_n = int(getattr(parameters.arguments, 'limit_n', 10) or 10)
     growth_trend = getattr(parameters.arguments, 'growth_trend', None)
-    max_prompt = getattr(parameters.arguments, 'max_prompt', DEFAULT_MAX_PROMPT)
-    insight_prompt = getattr(parameters.arguments, 'insight_prompt', DEFAULT_INSIGHT_PROMPT)
+    max_prompt = parameters.arguments.max_prompt if hasattr(parameters.arguments, 'max_prompt') and parameters.arguments.max_prompt else DEFAULT_MAX_PROMPT
+    insight_prompt = parameters.arguments.insight_prompt if hasattr(parameters.arguments, 'insight_prompt') and parameters.arguments.insight_prompt else DEFAULT_INSIGHT_PROMPT
     viz_layout = getattr(parameters.arguments, 'table_viz_layout', TABLE_WITH_CHART_LAYOUT)
     table_name = getattr(parameters.arguments, 'table_name', None)
     if table_name == "":
