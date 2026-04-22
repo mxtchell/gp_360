@@ -400,6 +400,17 @@ Use a professional finance tone. Be concise (3-4 sentences).
         ParameterDisplayDescription(key="", value=f"Period: {', '.join(periods) if periods else 'Not specified'}")
     ]
 
+    # Add filters to parameter display
+    for f in other_filters:
+        dim = f.get('dim') or f.get('col') or f.get('attribute', '')
+        val = f.get('val') or f.get('values', '')
+        if isinstance(val, list):
+            val = ', '.join(val)
+        if dim and val:
+            # Capitalize dimension name for display
+            dim_label = dim.replace('_', ' ').title()
+            param_info.append(ParameterDisplayDescription(key="", value=f"{dim_label}: {val}"))
+
     for k, v in price_scenario.items():
         formatted_val = f"{v:+.1%}"
         param_info.append(ParameterDisplayDescription(key="", value=f"{k}: {formatted_val}"))
@@ -708,8 +719,8 @@ class WhatIfAnalysisEngine:
                 f"${row['Material_Forecasted']/1000000:.2f}M",
                 f"${row['Material_Estimated']/1000000:.2f}M",
                 f"{row['Material_Change']:.2%}",
-                f"${row['Cocoa_Forecasted']/1000:.2f}K",
-                f"${row['Cocoa_Estimated']/1000:.2f}K",
+                f"${row['Cocoa_Forecasted']/1000000:.2f}M",
+                f"${row['Cocoa_Estimated']/1000000:.2f}M",
                 f"{row['Cocoa_Change']:.2%}"
             ])
 
