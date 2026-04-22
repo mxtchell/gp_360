@@ -436,10 +436,13 @@ class WhatIfAnalysisEngine:
         dataset = self.client.data.get_dataset(dataset_id=self.dataset_id)
         self.database_id = dataset.database.database_id
 
-        # If no table_name provided, try to get from dataset
+        # Get table name from dataset's fact entity if not provided
         if not self.table_name:
-            # Use dataset name or first table as fallback
-            self.table_name = getattr(dataset, 'name', None) or 'data'
+            domain_entity = next((x for x in dataset.domain_objects if x.type == "factEntity"), None)
+            if domain_entity and hasattr(domain_entity, 'db_table'):
+                self.table_name = domain_entity.db_table
+            else:
+                self.table_name = getattr(dataset, 'name', None) or 'data'
 
     def run(self):
         """Run the COGS what-if analysis and return results DataFrame"""
