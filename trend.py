@@ -16,8 +16,143 @@ from skill_framework.skills import ExportData
 
 RUNNING_LOCALLY = False
 
-
 logger = logging.getLogger(__name__)
+
+# Metric type definitions for formatting
+CURRENCY_MILLIONS_METRICS = [
+    'gross_revenue', 'net_revenue', 'revenue', 'sales', 'cogs', 'cost_of_goods_sold',
+    'gross_profit', 'brand_contribution_margin', 'operating_income', 'ebitda', 'ebit'
+]
+PERCENTAGE_METRICS = [
+    'margin', 'growth', 'share', 'rate', 'percent', 'pct', 'ratio', 'yield'
+]
+PRICE_METRICS = [
+    'price', 'asp', 'average_selling_price', 'unit_price', 'cost_per_unit'
+]
+
+
+def get_metric_format_type(metric_name):
+    """Determine the format type for a metric based on its name."""
+    if not metric_name:
+        return 'number'
+
+    metric_lower = metric_name.lower().replace(' ', '_')
+
+    # Check for percentage metrics
+    for pct_metric in PERCENTAGE_METRICS:
+        if pct_metric in metric_lower:
+            return 'percentage'
+
+    # Check for price metrics
+    for price_metric in PRICE_METRICS:
+        if price_metric in metric_lower:
+            return 'price'
+
+    # Check for large currency metrics (display in millions)
+    for currency_metric in CURRENCY_MILLIONS_METRICS:
+        if currency_metric in metric_lower:
+            return 'currency_millions'
+
+    return 'number'
+
+
+def apply_chart_formatting(charts):
+    """Apply smart formatting to chart data based on metric type.
+
+    - Currency metrics (revenue, profit, etc.): Scale to millions, format as $X.XM
+    - Percentage metrics: Format as X.X%
+    - Price metrics: Format as $X.XX
+    - Other: Format with commas
+    """
+    for chart_name, vars_dict in charts.items():
+        metric_name = vars_dict.get('absolute_metric_name', '') or chart_name
+        format_type = get_metric_format_type(metric_name)
+
+        logger.info(f"Formatting chart '{chart_name}': metric={metric_name}, format_type={format_type}")
+
+        # Process each series type (absolute, growth, difference)
+        for prefix in ['absolute_', 'growth_', 'difference_']:
+            series_key = f'{prefix}series'
+            y_axis_key = f'{prefix}y_axis'
+
+            if series_key not in vars_dict:
+                continue
+
+            # Determine format based on prefix and metric type
+            if prefix == 'growth_':
+                # Growth is always percentage
+                current_format = 'percentage'
+            elif prefix == 'difference_':
+                # Difference uses same format as absolute but could be negative
+                current_format = format_type
+            else:
+                current_format = format_type
+
+            # Scale data and set formats
+            if current_format == 'currency_millions':
+                # Scale series data to millions
+                for series in vars_dict[series_key]:
+                    if isinstance(series, dict) and 'data' in series:
+                        series['data'] = [
+                            round(val / 1_000_000, 2) if val is not None and isinstance(val, (int, float)) else val
+                            for val in series['data']
+                        ]
+                        # Update tooltip format
+                        series['tooltip'] = {'pointFormat': '<b>{series.name}</b>: ${point.y:,.2f}M<br/>'}
+
+                # Update Y-axis format
+                if y_axis_key in vars_dict:
+                    y_axes = vars_dict[y_axis_key] if isinstance(vars_dict[y_axis_key], list) else [vars_dict[y_axis_key]]
+                    for axis in y_axes:
+                        if isinstance(axis, dict):
+                            axis['labels'] = axis.get('labels', {})
+                            axis['labels']['format'] = '${value:,.1f}M'
+
+            elif current_format == 'percentage':
+                # Format as percentage
+                for series in vars_dict[series_key]:
+                    if isinstance(series, dict) and 'data' in series:
+                        # Scale to percentage if values are decimals (0.xx)
+                        series['data'] = [
+                            round(val * 100, 2) if val is not None and isinstance(val, (int, float)) and abs(val) < 1 else val
+                            for val in series['data']
+                        ]
+                        series['tooltip'] = {'pointFormat': '<b>{series.name}</b>: {point.y:,.1f}%<br/>'}
+
+                if y_axis_key in vars_dict:
+                    y_axes = vars_dict[y_axis_key] if isinstance(vars_dict[y_axis_key], list) else [vars_dict[y_axis_key]]
+                    for axis in y_axes:
+                        if isinstance(axis, dict):
+                            axis['labels'] = axis.get('labels', {})
+                            axis['labels']['format'] = '{value:,.1f}%'
+
+            elif current_format == 'price':
+                # Format as currency (not scaled)
+                for series in vars_dict[series_key]:
+                    if isinstance(series, dict):
+                        series['tooltip'] = {'pointFormat': '<b>{series.name}</b>: ${point.y:,.2f}<br/>'}
+
+                if y_axis_key in vars_dict:
+                    y_axes = vars_dict[y_axis_key] if isinstance(vars_dict[y_axis_key], list) else [vars_dict[y_axis_key]]
+                    for axis in y_axes:
+                        if isinstance(axis, dict):
+                            axis['labels'] = axis.get('labels', {})
+                            axis['labels']['format'] = '${value:,.2f}'
+
+            else:
+                # Default number format with commas
+                for series in vars_dict[series_key]:
+                    if isinstance(series, dict):
+                        series['tooltip'] = {'pointFormat': '<b>{series.name}</b>: {point.y:,.0f}<br/>'}
+
+                if y_axis_key in vars_dict:
+                    y_axes = vars_dict[y_axis_key] if isinstance(vars_dict[y_axis_key], list) else [vars_dict[y_axis_key]]
+                    for axis in y_axes:
+                        if isinstance(axis, dict):
+                            axis['labels'] = axis.get('labels', {})
+                            axis['labels']['format'] = '{value:,.0f}'
+
+    return charts
 
 @skill(
     name=trend_analysis_config.name,
@@ -61,6 +196,13 @@ logger = logging.getLogger(__name__)
             constrained_to=None,
             constrained_values=["Y/Y", "P/P", "None"],
             description="Growth type either Y/Y, P/P, or None"
+        ),
+        SkillParameter(
+            name="compare_metrics",
+            is_multi=True,
+            constrained_to=None,
+            constrained_values=["forecast", "budget"],
+            description="Compare actuals against forecast and/or budget scenarios. When specified, 'scenario' is automatically added as a breakout."
         ),
         SkillParameter(
             name="other_filters",
@@ -107,12 +249,19 @@ logger = logging.getLogger(__name__)
 )
 def trend(parameters: SkillInput):
     print(f"Skill received following parameters: {parameters.arguments}")
-    param_dict = {"periods": [], "metrics": None, "limit_n": 10, "breakouts": [], "growth_type": None, "other_filters": [], "time_granularity": None}
+    param_dict = {"periods": [], "metrics": None, "limit_n": 10, "breakouts": [], "growth_type": None, "other_filters": [], "time_granularity": None, "compare_metrics": []}
 
     # Update param_dict with values from parameters.arguments if they exist
     for key in param_dict:
         if hasattr(parameters.arguments, key) and getattr(parameters.arguments, key) is not None:
             param_dict[key] = getattr(parameters.arguments, key)
+
+    # If compare_metrics specified, auto-add 'scenario' to breakouts
+    if param_dict["compare_metrics"]:
+        if param_dict["breakouts"] is None:
+            param_dict["breakouts"] = ["scenario"]
+        elif "scenario" not in param_dict["breakouts"]:
+            param_dict["breakouts"] = list(param_dict["breakouts"]) + ["scenario"]
 
     env = SimpleNamespace(**param_dict)
     TrendTemplateParameterSetup(env=env)
@@ -124,6 +273,9 @@ def trend(parameters: SkillInput):
     insights_dfs = [env.trend.df_notes, env.trend.facts, env.trend.top_facts, env.trend.bottom_facts]
 
     charts = env.trend.get_dynamic_layout_chart_vars()
+
+    # Apply smart formatting based on metric type
+    charts = apply_chart_formatting(charts)
 
     viz, slides, insights, final_prompt = render_layout(charts,
                                                 tables,
