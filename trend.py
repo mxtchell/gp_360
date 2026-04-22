@@ -2,916 +2,242 @@ from __future__ import annotations
 
 import json
 import logging
-import pandas as pd
-import numpy as np
 from types import SimpleNamespace
-from typing import Dict, List, Optional
-from datetime import datetime
-from dateutil.relativedelta import relativedelta
 
 import jinja2
-from ar_analytics import ArUtils
-from ar_analytics.helpers.utils import get_dataset_id
-from answer_rocket import AnswerRocketClient
-from skill_framework import (
-    SkillVisualization, skill, SkillParameter, SkillInput, SkillOutput,
+from ar_analytics import AdvanceTrend, TrendTemplateParameterSetup, ArUtils
+from ar_analytics.defaults import trend_analysis_config, default_trend_chart_layout, default_table_layout, \
+    get_table_layout_vars, default_ppt_trend_chart_layout, default_ppt_table_layout
+from skill_framework import SkillVisualization, skill, SkillParameter, SkillInput, SkillOutput, \
     ParameterDisplayDescription
-)
 from skill_framework.layouts import wire_layout
+from skill_framework.preview import preview_skill
 from skill_framework.skills import ExportData
+
+RUNNING_LOCALLY = False
+
 
 logger = logging.getLogger(__name__)
 
-# Default prompts
-DEFAULT_MAX_PROMPT = """
-Based on the following trend analysis facts:
-{% for fact_list in facts %}
-{% for fact in fact_list %}
-- {{ fact }}
-{% endfor %}
-{% endfor %}
-
-Provide a concise executive summary (2-3 sentences) highlighting the key trends.
-"""
-
-DEFAULT_INSIGHT_PROMPT = """
-Analyze the following trend data:
-{% for fact_list in facts %}
-{% for fact in fact_list %}
-- {{ fact }}
-{% endfor %}
-{% endfor %}
-
-Provide detailed insights covering:
-1. Overall trend direction and magnitude
-2. Key peaks and valleys
-3. Comparison vs forecast/budget (if applicable)
-4. Seasonal patterns or anomalies
-5. Actionable recommendations
-
-Format in clear markdown with bullet points.
-"""
-
-# Chart layout for trend visualization
-TREND_CHART_LAYOUT = """{
-    "layoutJson": {
-        "type": "Document",
-        "gap": "0px",
-        "style": {
-            "backgroundColor": "#ffffff",
-            "width": "100%",
-            "height": "max-content",
-            "padding": "15px",
-            "gap": "20px"
-        },
-        "children": [
-            {
-                "name": "CardContainer0",
-                "type": "CardContainer",
-                "children": "",
-                "minHeight": "80px",
-                "rows": 2,
-                "columns": 1,
-                "style": {
-                    "border-radius": "11.911px",
-                    "background": "#2563EB",
-                    "padding": "10px",
-                    "fontFamily": "Arial"
-                },
-                "hidden": false
-            },
-            {
-                "name": "Header0",
-                "type": "Header",
-                "children": "",
-                "text": "Trend Analysis",
-                "style": {
-                    "fontSize": "20px",
-                    "fontWeight": "700",
-                    "color": "#ffffff",
-                    "textAlign": "left"
-                },
-                "parentId": "CardContainer0",
-                "hidden": false
-            },
-            {
-                "name": "Paragraph0",
-                "type": "Paragraph",
-                "children": "",
-                "text": "Time Series Analysis",
-                "style": {
-                    "fontSize": "15px",
-                    "fontWeight": "normal",
-                    "color": "#fafafa"
-                },
-                "parentId": "CardContainer0",
-                "hidden": false
-            },
-            {
-                "name": "HighchartsChart0",
-                "type": "HighchartsChart",
-                "minHeight": "400px",
-                "options": {
-                    "chart": {
-                        "type": "line"
-                    },
-                    "title": {
-                        "text": ""
-                    },
-                    "xAxis": {
-                        "categories": [],
-                        "title": {"text": ""}
-                    },
-                    "yAxis": {
-                        "title": {"text": ""}
-                    },
-                    "series": [],
-                    "credits": {"enabled": false},
-                    "legend": {
-                        "enabled": true,
-                        "align": "center",
-                        "verticalAlign": "bottom"
-                    },
-                    "plotOptions": {
-                        "line": {
-                            "dataLabels": {"enabled": false},
-                            "marker": {"enabled": true, "radius": 4}
-                        }
-                    },
-                    "tooltip": {
-                        "shared": true,
-                        "crosshairs": true
-                    }
-                },
-                "hidden": false
-            },
-            {
-                "name": "FlexContainer0",
-                "type": "FlexContainer",
-                "children": "",
-                "minHeight": "150px",
-                "style": {
-                    "borderRadius": "11.911px",
-                    "box-shadow": "0px 0px 8.785px 0px rgba(0, 0, 0, 0.10) inset",
-                    "padding": "15px",
-                    "fontFamily": "Arial",
-                    "backgroundColor": "#edf2f7",
-                    "border-left": "4px solid #3b82f6"
-                },
-                "direction": "column",
-                "hidden": false
-            },
-            {
-                "name": "Markdown0",
-                "type": "Markdown",
-                "children": "",
-                "text": "Insights will appear here...",
-                "style": {
-                    "fontSize": "14px",
-                    "color": "#000000"
-                },
-                "parentId": "FlexContainer0"
-            },
-            {
-                "name": "DataTable0",
-                "type": "DataTable",
-                "children": "",
-                "columns": [],
-                "data": [],
-                "styles": {
-                    "td": {"vertical-align": "middle"}
-                }
-            }
-        ]
-    },
-    "inputVariables": [
-        {
-            "name": "headline",
-            "isRequired": false,
-            "defaultValue": null,
-            "targets": [{"elementName": "Header0", "fieldName": "text"}]
-        },
-        {
-            "name": "sub_headline",
-            "isRequired": false,
-            "defaultValue": null,
-            "targets": [{"elementName": "Paragraph0", "fieldName": "text"}]
-        },
-        {
-            "name": "chart_categories",
-            "isRequired": false,
-            "defaultValue": null,
-            "targets": [{"elementName": "HighchartsChart0", "fieldName": "options.xAxis.categories"}]
-        },
-        {
-            "name": "chart_y_axis",
-            "isRequired": false,
-            "defaultValue": null,
-            "targets": [{"elementName": "HighchartsChart0", "fieldName": "options.yAxis"}]
-        },
-        {
-            "name": "chart_data",
-            "isRequired": false,
-            "defaultValue": null,
-            "targets": [{"elementName": "HighchartsChart0", "fieldName": "options.series"}]
-        },
-        {
-            "name": "exec_summary",
-            "isRequired": false,
-            "defaultValue": null,
-            "targets": [{"elementName": "Markdown0", "fieldName": "text"}]
-        },
-        {
-            "name": "data",
-            "isRequired": false,
-            "defaultValue": null,
-            "targets": [{"elementName": "DataTable0", "fieldName": "data"}]
-        },
-        {
-            "name": "col_defs",
-            "isRequired": false,
-            "defaultValue": null,
-            "targets": [{"elementName": "DataTable0", "fieldName": "columns"}]
-        }
-    ]
-}"""
-
-
-def format_number(value, is_currency=True, decimals=2):
-    """Format numbers with M/K/B abbreviations"""
-    if pd.isna(value) or not isinstance(value, (int, float)):
-        return str(value) if not pd.isna(value) else "N/A"
-
-    abs_value = abs(value)
-
-    if abs_value >= 1_000_000_000:
-        formatted = f"{value / 1_000_000_000:.{decimals}f}B"
-    elif abs_value >= 1_000_000:
-        formatted = f"{value / 1_000_000:.{decimals}f}M"
-    elif abs_value >= 1_000:
-        formatted = f"{value / 1_000:.{decimals}f}K"
-    else:
-        formatted = f"{value:.{decimals}f}"
-
-    if is_currency:
-        formatted = f"${formatted}"
-
-    return formatted
-
-
-def format_display_name(name):
-    """Format technical names to display names"""
-    if not name:
-        return name
-
-    special_cases = {
-        'region_l1': 'Region L1',
-        'region_l2': 'Secondary Region',
-        'market_type_1': 'Market Type 1',
-        'customer_type': 'Customer Type',
-        'gross_revenue': 'Gross Revenue',
-        'net_revenue': 'Net Revenue',
-        'gross_profit': 'Gross Profit',
-        'brand_contribution_margin': 'Brand Contribution Margin',
-        'units_carton': 'Units (Carton)',
-        'brand': 'Product Brand',
-        'category': 'Product Category',
-    }
-
-    if name.lower() in special_cases:
-        return special_cases[name.lower()]
-
-    return name.replace('_', ' ').title()
-
-
-class TrendAnalysis:
-    """Trend Analysis with scenario comparisons"""
-
-    def __init__(self, client, metrics, periods, breakouts=None, time_granularity='month',
-                 growth_type='Y/Y', compare_metrics=None, other_filters=None,
-                 top_n=10, table_name=None):
-        self.client = client
-        self.metrics = metrics if isinstance(metrics, list) else [metrics]
-        self.periods = periods if isinstance(periods, list) else [periods]
-        self.breakouts = breakouts if isinstance(breakouts, list) else [breakouts] if breakouts else []
-        self.time_granularity = time_granularity or 'month'
-        self.growth_type = growth_type
-        self.compare_metrics = compare_metrics or []  # ['forecast', 'budget']
-        self.other_filters = other_filters or []
-        self.top_n = top_n
-        self.table_name = table_name
-
-        # Get database_id and dataset_id from platform context
-        self.dataset_id = get_dataset_id()
-        dataset = self.client.data.get_dataset(dataset_id=self.dataset_id)
-        self.database_id = dataset.database.database_id
-
-        # Get table name from dataset's fact entity if not provided
-        if not self.table_name:
-            domain_entity = next((x for x in dataset.domain_objects if x.type == "factEntity"), None)
-            if domain_entity and hasattr(domain_entity, 'db_table'):
-                self.table_name = domain_entity.db_table
-            else:
-                self.table_name = getattr(dataset, 'name', None) or 'data'
-
-        self.results = {}
-        self.facts = []
-        self.title = ""
-        self.subtitle = ""
-        self.date_column = 'end_date'  # or start_date depending on dataset
-
-        logger.info(f"TrendAnalysis initialized: database_id={self.database_id}, table_name={self.table_name}")
-
-    def parse_period_to_date_range(self, period_str):
-        """Convert period string to date range for SQL query"""
-        from dateutil.parser import parse
-
-        if not period_str:
-            return None, None
-
-        period_lower = period_str.lower().strip()
-
-        # Handle year (2024, 2025)
-        if period_lower.isdigit() and len(period_lower) == 4:
-            year = int(period_lower)
-            return f"{year}-01-01", f"{year}-12-31"
-
-        # Handle quarters
-        if period_lower.startswith('q'):
-            parts = period_str.split()
-            quarter = int(parts[0][1])
-            year = int(parts[1])
-
-            quarter_map = {
-                1: ('01-01', '03-31'),
-                2: ('04-01', '06-30'),
-                3: ('07-01', '09-30'),
-                4: ('10-01', '12-31')
-            }
-            start_month_day, end_month_day = quarter_map[quarter]
-            return f"{year}-{start_month_day}", f"{year}-{end_month_day}"
-
-        # Handle single months
-        try:
-            parsed_date = parse(period_str, fuzzy=True)
-            year = parsed_date.year
-            month = parsed_date.month
-
-            if month == 12:
-                last_day = 31
-            elif month in [4, 6, 9, 11]:
-                last_day = 30
-            elif month == 2:
-                if (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0):
-                    last_day = 29
-                else:
-                    last_day = 28
-            else:
-                last_day = 31
-
-            return f"{year}-{month:02d}-01", f"{year}-{month:02d}-{last_day}"
-        except:
-            return period_str, period_str
-
-    def get_date_trunc_expression(self):
-        """Get SQL date truncation expression based on granularity"""
-        granularity_map = {
-            'day': f"DATE({self.date_column})",
-            'week': f"DATE_TRUNC('week', {self.date_column})",
-            'month': f"DATE_TRUNC('month', {self.date_column})",
-            'quarter': f"DATE_TRUNC('quarter', {self.date_column})",
-            'year': f"DATE_TRUNC('year', {self.date_column})"
-        }
-        return granularity_map.get(self.time_granularity.lower(), f"DATE_TRUNC('month', {self.date_column})")
-
-    def build_filter_clause(self):
-        """Build SQL WHERE clause from filters"""
-        clauses = []
-
-        for filter_dict in self.other_filters:
-            dim = filter_dict.get('dim') or filter_dict.get('col')
-            op = filter_dict.get('op', '=')
-            val = filter_dict.get('val')
-
-            if dim and val:
-                if isinstance(val, list):
-                    if len(val) == 1:
-                        clauses.append(f"UPPER({dim}) {op} UPPER('{val[0]}')")
-                    else:
-                        val_str = ", ".join([f"UPPER('{v}')" for v in val])
-                        clauses.append(f"UPPER({dim}) IN ({val_str})")
-                elif isinstance(val, str):
-                    clauses.append(f"UPPER({dim}) {op} UPPER('{val}')")
-                else:
-                    clauses.append(f"{dim} {op} {val}")
-
-        return " AND " + " AND ".join(clauses) if clauses else ""
-
-    def query_trend_data(self):
-        """Query trend data with scenario support"""
-        logger.info(f"Querying trend data for metrics: {self.metrics}")
-
-        filter_clause = self.build_filter_clause()
-        date_trunc = self.get_date_trunc_expression()
-        metric_cols = ", ".join([f"SUM({m}) as {m}" for m in self.metrics])
-
-        # Parse period range
-        start_date, end_date = None, None
-        for period in self.periods:
-            s, e = self.parse_period_to_date_range(period)
-            if s and (start_date is None or s < start_date):
-                start_date = s
-            if e and (end_date is None or e > end_date):
-                end_date = e
-
-        if not start_date or not end_date:
-            raise ValueError("Could not parse period range")
-
-        # Query with scenario column
-        query = f"""
-        SELECT
-            {date_trunc} as period,
-            scenario,
-            {metric_cols}
-        FROM {self.table_name}
-        WHERE {self.date_column} BETWEEN '{start_date}' AND '{end_date}'
-        {filter_clause}
-        GROUP BY {date_trunc}, scenario
-        ORDER BY period
-        """
-
-        logger.info(f"Trend query: {query}")
-        result = self.client.data.execute_sql_query(
-            database_id=self.database_id,
-            sql_query=query,
-            row_limit=10000
-        )
-        df = result.df if hasattr(result, 'df') else pd.DataFrame()
-
-        if df.empty:
-            raise ValueError(f"No data found for periods {self.periods}")
-
-        # Pivot by scenario
-        df = self._pivot_scenario(df)
-
-        return df, start_date, end_date
-
-    def _pivot_scenario(self, df):
-        """Pivot dataframe by scenario column"""
-        if 'scenario' not in df.columns:
-            return df
-
-        metric_cols = self.metrics
-        pivoted = df.pivot_table(
-            index=['period'],
-            values=metric_cols,
-            columns='scenario',
-            aggfunc='sum'
-        ).reset_index()
-
-        # Flatten multi-level columns
-        pivoted.columns = ['_'.join(col).strip() if isinstance(col, tuple) and col[-1] else col[0] for col in pivoted.columns]
-
-        # Rename actuals columns to base metric name
-        rename_dict = {f"{m}_actuals": m for m in metric_cols}
-        pivoted = pivoted.rename(columns=rename_dict)
-
-        return pivoted
-
-    def calculate_metrics(self, df):
-        """Calculate variance metrics for forecast/budget comparisons"""
-        result_df = df.copy()
-
-        for metric in self.metrics:
-            for comp in self.compare_metrics:
-                comp_col = f"{metric}_{comp}"
-                if comp_col in result_df.columns:
-                    # Calculate variance
-                    result_df[f'{metric}_{comp}_var'] = result_df[metric] - result_df[comp_col]
-                    result_df[f'{metric}_{comp}_var_pct'] = (result_df[metric] - result_df[comp_col]) / result_df[comp_col]
-                    result_df[f'{metric}_{comp}_var_pct'] = result_df[f'{metric}_{comp}_var_pct'].replace([np.inf, -np.inf], np.nan)
-
-        return result_df
-
-    def create_chart_data(self, df):
-        """Create chart data for visualization"""
-        metric = self.metrics[0]
-        metric_display = format_display_name(metric)
-
-        # Format periods for x-axis
-        categories = []
-        for p in df['period']:
-            if pd.isna(p):
-                categories.append('N/A')
-            elif hasattr(p, 'strftime'):
-                if self.time_granularity == 'month':
-                    categories.append(p.strftime('%b %Y'))
-                elif self.time_granularity == 'quarter':
-                    q = (p.month - 1) // 3 + 1
-                    categories.append(f'Q{q} {p.year}')
-                elif self.time_granularity == 'year':
-                    categories.append(str(p.year))
-                else:
-                    categories.append(p.strftime('%Y-%m-%d'))
-            else:
-                categories.append(str(p))
-
-        # Build series
-        series = []
-
-        # Actuals series
-        if metric in df.columns:
-            actuals_data = []
-            for val in df[metric]:
-                if pd.isna(val):
-                    actuals_data.append(None)
-                else:
-                    actuals_data.append(round(val / 1_000_000, 2))
-
-            series.append({
-                'name': f'{metric_display} (Actuals)',
-                'data': actuals_data,
-                'color': '#5DADE2',
-                'type': 'line'
-            })
-
-        # Forecast/Budget series
-        for comp in self.compare_metrics:
-            comp_col = f"{metric}_{comp}"
-            if comp_col in df.columns:
-                comp_data = []
-                for val in df[comp_col]:
-                    if pd.isna(val):
-                        comp_data.append(None)
-                    else:
-                        comp_data.append(round(val / 1_000_000, 2))
-
-                color = '#F8C471' if comp == 'forecast' else '#82E0AA'
-                series.append({
-                    'name': f'{metric_display} ({comp.title()})',
-                    'data': comp_data,
-                    'color': color,
-                    'type': 'line',
-                    'dashStyle': 'dash'
-                })
-
-        # Calculate Y-axis max
-        all_values = []
-        for s in series:
-            all_values.extend([v for v in s['data'] if v is not None])
-        max_val = max(all_values) if all_values else 100
-
-        import math
-        y_max = math.ceil(max_val / 100) * 100
-
-        return {
-            'chart_categories': categories,
-            'chart_data': series,
-            'chart_y_axis': {
-                'title': {'text': metric_display},
-                'min': 0,
-                'max': y_max,
-                'labels': {'format': '${value}M'}
-            }
-        }
-
-    def create_table_data(self, df):
-        """Create formatted table data"""
-        metric = self.metrics[0]
-        metric_display = format_display_name(metric)
-
-        columns = [{'name': 'Period'}]
-        col_mapping = [('period', 'Period')]
-
-        # Actuals
-        if metric in df.columns:
-            columns.append({'name': f'{metric_display} (Actuals)'})
-            col_mapping.append((metric, f'{metric_display} (Actuals)'))
-
-        # Forecast/Budget columns
-        for comp in self.compare_metrics:
-            comp_col = f"{metric}_{comp}"
-            var_pct_col = f"{metric}_{comp}_var_pct"
-
-            if comp_col in df.columns:
-                columns.append({'name': f'{metric_display} ({comp.title()})'})
-                col_mapping.append((comp_col, f'{metric_display} ({comp.title()})'))
-
-            if var_pct_col in df.columns:
-                columns.append({'name': f'vs {comp.title()} %'})
-                col_mapping.append((var_pct_col, f'vs {comp.title()} %'))
-
-        # Build data rows
-        data = []
-        for _, row in df.iterrows():
-            row_data = []
-            for col_name, display_name in col_mapping:
-                val = row.get(col_name)
-
-                if col_name == 'period':
-                    if pd.isna(val):
-                        row_data.append('N/A')
-                    elif hasattr(val, 'strftime'):
-                        if self.time_granularity == 'month':
-                            row_data.append(val.strftime('%b %Y'))
-                        else:
-                            row_data.append(val.strftime('%Y-%m-%d'))
-                    else:
-                        row_data.append(str(val))
-                elif 'pct' in col_name.lower() or '%' in display_name:
-                    if pd.isna(val):
-                        row_data.append('N/A')
-                    else:
-                        row_data.append(f"{val*100:.2f}%")
-                else:
-                    row_data.append(format_number(val, is_currency=True))
-
-            data.append(row_data)
-
-        return {'columns': columns, 'data': data}
-
-    def run_analysis(self):
-        """Run complete trend analysis"""
-        logger.info("Starting trend analysis")
-
-        # Remove 'scenario' from breakouts if present
-        self.breakouts = [b for b in self.breakouts if b and b.lower() != 'scenario']
-
-        df, start_date, end_date = self.query_trend_data()
-        df = self.calculate_metrics(df)
-
-        self.results = {
-            'df': df,
-            'chart': self.create_chart_data(df),
-            'table': self.create_table_data(df)
-        }
-
-        # Generate facts
-        metric = self.metrics[0]
-        metric_display = format_display_name(metric)
-
-        if metric in df.columns and len(df) > 0:
-            first_val = df[metric].iloc[0]
-            last_val = df[metric].iloc[-1]
-            change = last_val - first_val
-            change_pct = (change / first_val) * 100 if first_val != 0 else 0
-
-            self.facts.append({
-                'fact': f"{metric_display} changed from {format_number(first_val)} to {format_number(last_val)} ({change_pct:+.1f}%)",
-                'category': 'trend'
-            })
-
-            max_val = df[metric].max()
-            min_val = df[metric].min()
-            self.facts.append({
-                'fact': f"Peak: {format_number(max_val)}, Low: {format_number(min_val)}",
-                'category': 'range'
-            })
-
-        # Set title/subtitle
-        filters_desc = []
-        for f in self.other_filters:
-            dim = f.get('dim') or f.get('col', '')
-            val = f.get('val', '')
-            if isinstance(val, list):
-                val = ', '.join(val)
-            if dim and val:
-                filters_desc.append(f"{val.title()}")
-
-        self.title = ', '.join(filters_desc) if filters_desc else "Total"
-
-        # Format date range for subtitle
-        try:
-            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
-            self.subtitle = f"Trend by {self.time_granularity} • {start_dt.strftime('%B %Y')} to {end_dt.strftime('%B %Y')}"
-        except:
-            self.subtitle = f"Trend by {self.time_granularity}"
-
-        logger.info("Analysis complete")
-        return self
-
-
 @skill(
-    name="Trend Analysis",
-    llm_name="Trend Analysis with Scenario Comparison",
-    description="Analyze metric trends over time with optional comparison to forecast or budget scenarios.",
-    capabilities="Time series trend analysis. Multiple time granularities (day, week, month, quarter, year). Scenario variance analysis vs Forecast and Budget. Line chart visualization with multiple series. Period-over-period comparisons.",
-    limitations="Requires 'scenario' column in dataset with values: actuals, budget, forecast. Requires date columns for period filtering.",
-    example_questions="Show me the revenue trend for 2024. What is the gross revenue trend for EMEA by month? Compare actual vs forecast revenue for Q2 2024. Show quarterly revenue trends for the biscuits category.",
-    parameter_guidance="Select metrics to analyze. Specify period range. Choose time granularity (month, quarter, year). Select compare_metrics (forecast, budget) for variance analysis. Add filters as needed.",
+    name=trend_analysis_config.name,
+    llm_name=trend_analysis_config.llm_name,
+    description=trend_analysis_config.description,
+    capabilities=trend_analysis_config.capabilities,
+    limitations=trend_analysis_config.limitations,
+    example_questions=trend_analysis_config.example_questions,
+    parameter_guidance=trend_analysis_config.parameter_guidance,
     parameters=[
         SkillParameter(
             name="periods",
             constrained_to="date_filter",
             is_multi=True,
-            description="Time periods for analysis (e.g., '2024', 'Q2 2024', 'Jan 2024 to Jun 2024')"
+            description="If provided by the user, list time periods in a format 'q2 2023', '2021', 'jan 2023', 'mat nov 2022', 'mat q1 2021', 'ytd q4 2022', 'ytd 2023', 'ytd', 'mat', '<no_period_provided>' or '<since_launch>'. Use knowledge about today's date to handle relative periods and open ended periods. If given a range, for example 'last 3 quarters, 'between q3 2022 to q4 2023' etc, enumerate the range into a list of valid dates. Don't include natural language words or phrases, only valid dates like 'q3 2023', '2022', 'mar 2020', 'ytd sep 2021', 'mat q4 2021', 'ytd q1 2022', 'ytd 2021', 'ytd', 'mat', '<no_period_provided>' or '<since_launch>' etc."
         ),
         SkillParameter(
             name="metrics",
             is_multi=True,
-            constrained_to="metrics",
-            description="Metrics to analyze (e.g., gross_revenue, net_revenue)"
+            constrained_to="metrics"
+        ),
+        SkillParameter(
+            name="limit_n",
+            description="limit the number of values by this number",
+            default_value=10
         ),
         SkillParameter(
             name="breakouts",
             is_multi=True,
             constrained_to="dimensions",
-            description="Dimensions for breakout analysis (optional)"
+            description="breakout dimension(s) for analysis."
         ),
         SkillParameter(
             name="time_granularity",
+            is_multi=False,
             constrained_to="date_dimensions",
-            description="Time granularity: day, week, month, quarter, year",
-            default_value="month"
+            description="time granularity provided by the user. only add if explicitly stated by user."
         ),
         SkillParameter(
             name="growth_type",
+            constrained_to=None,
             constrained_values=["Y/Y", "P/P", "None"],
-            description="Growth comparison type",
-            default_value="None"
-        ),
-        SkillParameter(
-            name="compare_metrics",
-            is_multi=True,
-            constrained_values=["forecast", "budget"],
-            description="Scenario comparisons to include (forecast, budget)"
+            description="Growth type either Y/Y, P/P, or None"
         ),
         SkillParameter(
             name="other_filters",
-            is_multi=True,
             constrained_to="filters",
-            description="Additional filters (e.g., region=EMEA, category=biscuits)"
-        ),
-        SkillParameter(
-            name="limit_n",
-            description="Number of results to display",
-            default_value=10
+            is_multi=True
         ),
         SkillParameter(
             name="max_prompt",
             parameter_type="prompt",
-            description="Prompt for executive summary",
-            default_value=DEFAULT_MAX_PROMPT
+            description="Prompt being used for max response.",
+            default_value=trend_analysis_config.max_prompt
         ),
         SkillParameter(
             name="insight_prompt",
             parameter_type="prompt",
-            description="Prompt for detailed insights",
-            default_value=DEFAULT_INSIGHT_PROMPT
+            description="Prompt being used for detailed insights.",
+            default_value=trend_analysis_config.insight_prompt
+        ),
+        SkillParameter(
+            name="table_viz_layout",
+            parameter_type="visualization",
+            description="Table Viz Layout",
+            default_value=default_table_layout
         ),
         SkillParameter(
             name="chart_viz_layout",
             parameter_type="visualization",
-            description="Layout for trend chart",
-            default_value=TREND_CHART_LAYOUT
+            description="Chart Viz Layout",
+            default_value=default_trend_chart_layout
         ),
         SkillParameter(
-            name="table_name",
-            parameter_type="code",
-            description="Table/view name (inherited from dataset if not provided)",
-            default_value=""
+            name="chart_ppt_layout",
+            parameter_type="visualization",
+            description="chart slide Viz Layout",
+            default_value=default_ppt_trend_chart_layout
+        ),
+        SkillParameter(
+            name="table_ppt_export_viz_layout",
+            parameter_type="visualization",
+            description="table slide Viz Layout",
+            default_value=default_ppt_table_layout
         )
     ]
 )
 def trend(parameters: SkillInput):
-    """Execute Trend Analysis with scenario comparisons"""
+    print(f"Skill received following parameters: {parameters.arguments}")
+    param_dict = {"periods": [], "metrics": None, "limit_n": 10, "breakouts": [], "growth_type": None, "other_filters": [], "time_granularity": None}
 
-    logger.info(f"Skill received parameters: {parameters.arguments}")
+    # Update param_dict with values from parameters.arguments if they exist
+    for key in param_dict:
+        if hasattr(parameters.arguments, key) and getattr(parameters.arguments, key) is not None:
+            param_dict[key] = getattr(parameters.arguments, key)
 
-    # Extract parameters
-    periods = getattr(parameters.arguments, 'periods', [])
-    metrics = getattr(parameters.arguments, 'metrics', [])
-    breakouts = getattr(parameters.arguments, 'breakouts', [])
-    time_granularity = getattr(parameters.arguments, 'time_granularity', 'month')
-    growth_type = getattr(parameters.arguments, 'growth_type', 'None')
-    compare_metrics = getattr(parameters.arguments, 'compare_metrics', [])
-    other_filters = getattr(parameters.arguments, 'other_filters', [])
-    top_n = int(getattr(parameters.arguments, 'limit_n', 10) or 10)
-    table_name = getattr(parameters.arguments, 'table_name', None)
-    if table_name == "":
-        table_name = None
+    env = SimpleNamespace(**param_dict)
+    TrendTemplateParameterSetup(env=env)
+    env.trend = AdvanceTrend.from_env(env=env)
+    df = env.trend.run_from_env()
+    param_info = [ParameterDisplayDescription(key=k, value=v) for k, v in env.trend.paramater_display_infomation.items()]
+    tables = [env.trend.display_dfs.get("Metrics Table")]
 
-    # Get prompts from platform
-    max_prompt = parameters.arguments.max_prompt
-    insight_prompt = parameters.arguments.insight_prompt
-    viz_layout = getattr(parameters.arguments, 'chart_viz_layout', TREND_CHART_LAYOUT)
+    insights_dfs = [env.trend.df_notes, env.trend.facts, env.trend.top_facts, env.trend.bottom_facts]
 
-    # Validate required parameters
-    if not periods:
-        return SkillOutput(
-            final_prompt="Please specify a time period for analysis.",
-            narrative="**Missing Parameter**: Period is required.",
-            visualizations=[],
-            warnings=["Period parameter is required"]
-        )
+    charts = env.trend.get_dynamic_layout_chart_vars()
 
-    if not metrics:
-        return SkillOutput(
-            final_prompt="Please specify at least one metric to analyze.",
-            narrative="**Missing Parameter**: Metric is required.",
-            visualizations=[],
-            warnings=["Metric parameter is required"]
-        )
+    viz, slides, insights, final_prompt = render_layout(charts,
+                                                tables,
+                                                env.trend.title,
+                                                env.trend.subtitle,
+                                                insights_dfs,
+                                                env.trend.warning_message,
+                                                parameters.arguments.max_prompt,
+                                                parameters.arguments.insight_prompt,
+                                                parameters.arguments.table_viz_layout,
+                                                parameters.arguments.chart_viz_layout,
+                                                parameters.arguments.chart_ppt_layout,
+                                                parameters.arguments.table_ppt_export_viz_layout)
 
-    # Initialize client
-    try:
-        client = AnswerRocketClient()
-        ar_utils = ArUtils()
-    except Exception as e:
-        logger.error(f"Failed to initialize client: {e}")
-        return SkillOutput(
-            final_prompt=f"Failed to initialize client: {str(e)}",
-            warnings=[str(e)]
-        )
-
-    # Run analysis
-    analysis = TrendAnalysis(
-        client=client,
-        metrics=metrics,
-        periods=periods,
-        breakouts=breakouts,
-        time_granularity=time_granularity or 'month',
-        growth_type=growth_type,
-        compare_metrics=compare_metrics or [],
-        other_filters=other_filters,
-        top_n=top_n,
-        table_name=table_name
-    )
-
-    try:
-        analysis.run_analysis()
-    except ValueError as e:
-        logger.error(f"Analysis failed: {e}")
-        return SkillOutput(
-            final_prompt=f"Analysis could not be completed: {str(e)}",
-            narrative=f"**Error**: {str(e)}",
-            visualizations=[],
-            warnings=[str(e)]
-        )
-
-    # Generate insights
-    facts_list = [pd.DataFrame(analysis.facts)]
-    insight_template = jinja2.Template(insight_prompt).render(facts=[facts_list])
-    max_response_prompt = jinja2.Template(max_prompt).render(facts=[facts_list])
-
-    try:
-        insights = ar_utils.get_llm_response(insight_template)
-    except:
-        insights = "Analysis complete. Review the trend charts and tables for detailed findings."
-
-    # Create visualization
-    result = analysis.results
-    metric_display = format_display_name(metrics[0])
-
-    general_vars = {
-        "headline": analysis.title,
-        "sub_headline": analysis.subtitle,
-        "exec_summary": insights
-    }
-
-    layout_vars = {
-        **general_vars,
-        **result['chart'],
-        'data': result['table']['data'],
-        'col_defs': result['table']['columns']
-    }
-
-    rendered = wire_layout(json.loads(viz_layout), layout_vars)
-    viz_list = [SkillVisualization(title=metric_display, layout=rendered)]
-
-    # Parameter display
-    param_info = [
-        ParameterDisplayDescription(key="", value=f"Metrics: {', '.join([format_display_name(m) for m in metrics])}"),
-    ]
-
-    # Add filter info
-    filter_parts = []
-    for f in other_filters:
-        dim = f.get('dim') or f.get('col') or ''
-        val = f.get('val') or ''
-        if isinstance(val, list):
-            val = ', '.join(val)
-        if dim and val:
-            filter_parts.append(f"{val} ({format_display_name(dim)})")
-
-    if filter_parts:
-        param_info.append(ParameterDisplayDescription(key="", value=f"Filter: {' and '.join(filter_parts)}"))
-
-    if breakouts:
-        param_info.append(ParameterDisplayDescription(key="", value=f"Breakouts: {', '.join([format_display_name(b) for b in breakouts if b])}"))
-
-    param_info.append(ParameterDisplayDescription(key="", value=f"Period: {', '.join(periods)}"))
-    param_info.append(ParameterDisplayDescription(key="", value=f"Granularity: {time_granularity or 'month'}"))
-
-    if compare_metrics:
-        comp_display = ' and '.join([f"vs. {c.title()}" for c in compare_metrics])
-        param_info.append(ParameterDisplayDescription(key="", value=f"Variance: {comp_display}"))
+    display_charts = env.trend.display_charts
 
     return SkillOutput(
-        final_prompt=max_response_prompt,
-        narrative=insights,
-        visualizations=viz_list,
+        final_prompt=final_prompt,
+        narrative=None,
+        visualizations=viz,
+        ppt_slides=slides,
         parameter_display_descriptions=param_info,
-        export_data=[ExportData(name=metric_display, data=result['df'])]
+        followup_questions=[],
+        export_data=[ExportData(name="Metrics Table", data=tables[0]),
+                     *[ExportData(name=chart, data=display_charts[chart].get("df")) for chart in display_charts.keys()]]
     )
+
+def map_chart_variables(chart_vars, prefix):
+    """
+    Maps prefixed chart variables to generic variable names expected by the layout.
+
+    Args:
+        chart_vars: Dictionary containing all chart variables with prefixes
+        prefix: The prefix to extract (e.g., 'absolute_', 'growth_', 'difference_')
+
+    Returns:
+        Dictionary with mapped variables using generic names
+    """
+    suffixes = ['series', 'x_axis_categories', 'y_axis', 'metric_name', 'meta_df_id']
+
+    mapped_vars = {}
+
+    for suffix in suffixes:
+        prefixed_key = f"{prefix}{suffix}"
+        if prefixed_key in chart_vars:
+            mapped_vars[suffix] = chart_vars[prefixed_key]
+
+    if 'footer' in chart_vars:
+        mapped_vars['footer'] = chart_vars['footer']
+    if 'hide_footer' in chart_vars:
+        mapped_vars['hide_footer'] = chart_vars['hide_footer']
+
+    return mapped_vars
+
+def render_layout(charts, tables, title, subtitle, insights_dfs, warnings, max_prompt, insight_prompt, table_viz_layout, chart_viz_layout, chart_ppt_layout, table_ppt_export_viz_layout):
+    facts = []
+    for i_df in insights_dfs:
+        facts.append(i_df.to_dict(orient='records'))
+
+    insight_template = jinja2.Template(insight_prompt).render(**{"facts": facts})
+    max_response_prompt = jinja2.Template(max_prompt).render(**{"facts": facts})
+
+    # adding insights
+    ar_utils = ArUtils()
+    insights = ar_utils.get_llm_response(insight_template)
+
+    tab_vars = {"headline": title if title else "Total",
+                "sub_headline": subtitle or "Trend Analysis",
+                "hide_growth_warning": False if warnings else True,
+                "exec_summary": insights if insights else "No Insight.",
+                "warning": warnings}
+
+    viz = []
+    slides = []
+    for name, chart_vars in charts.items():
+        chart_vars["footer"] = f"*{chart_vars['footer']}" if chart_vars.get('footer') else "No additional info."
+        rendered = wire_layout(json.loads(chart_viz_layout), {**tab_vars, **chart_vars})
+        viz.append(SkillVisualization(title=name, layout=rendered))
+
+        prefixes = ["absolute_", "growth_", "difference_"]
+
+        for prefix in prefixes:
+            if (prefix in ["growth_", "difference_"] and
+                chart_vars.get("hide_growth_chart", False)):
+                continue
+
+            try:
+                mapped_vars = map_chart_variables(chart_vars, prefix)
+                slide = wire_layout(json.loads(chart_ppt_layout), {**tab_vars, **mapped_vars})
+                slides.append(slide)
+            except Exception as e:
+                logger.error(f"Error rendering chart ppt slide for prefix '{prefix}' in chart '{name}': {e}")
+
+    table_vars = get_table_layout_vars(tables[0])
+    table = wire_layout(json.loads(table_viz_layout), {**tab_vars, **table_vars})
+    viz.append(SkillVisualization(title="Metrics Table", layout=table))
+
+    if table_ppt_export_viz_layout is not None:
+        try: 
+            table_slide = wire_layout(json.loads(table_ppt_export_viz_layout), {**tab_vars, **table_vars})
+            slides.append(table_slide)
+        except Exception as e:
+            logger.error(f"Error rendering table ppt slide: {e}")
+    else:
+        slides.append(table)
+
+    return viz, slides, insights, max_response_prompt
+
+if __name__ == '__main__':
+    skill_input: SkillInput = trend.create_input(arguments={
+        'metrics': ["sales", "volume"],
+        'periods': ["2021", "2022"],
+        'growth_type': "Y/Y",
+        "other_filters": [{"dim": "brand", "op": "=", "val": ["barilla"]}]
+    })
+    out = trend(skill_input)
+    preview_skill(trend, out)
