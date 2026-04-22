@@ -493,12 +493,11 @@ class WhatIfAnalysisEngine:
         else:
             raise ValueError("Period is required but was not provided")
 
-        # Query COGS by category for actuals only
+        # Query COGS by category
         query = f"""
         SELECT {self.breakout}, SUM(cogs) as cogs
         FROM {self.table_name}
-        WHERE scenario = 'actuals'
-        AND end_date BETWEEN '{start_date}' AND '{end_date}'
+        WHERE start_date BETWEEN '{start_date}' AND '{end_date}'
         {filter_clause}
         GROUP BY {self.breakout}
         """
