@@ -1402,16 +1402,33 @@ def metric_drivers(parameters: SkillInput):
     try:
         dataset_id = get_dataset_id()
         dataset = client.data.get_dataset(dataset_id=dataset_id)
-        metadata = dataset.misc_info if hasattr(dataset, 'misc_info') else {}
 
-        # Get metric hierarchy and groups
-        metric_hierarchy_groups = metadata.get('metric_hierarchy_groups', [])
+        # Try multiple ways to access misc_info
+        misc_info = {}
+        if hasattr(dataset, 'misc_info') and dataset.misc_info:
+            misc_info = dataset.misc_info
+            logger.info(f"Got misc_info from dataset.misc_info: {type(misc_info)}")
+        elif hasattr(dataset, 'get_metadata'):
+            metadata = dataset.get_metadata()
+            misc_info = metadata.get('misc_info', {}) if metadata else {}
+            logger.info(f"Got misc_info from get_metadata(): {type(misc_info)}")
+
+        # Handle if misc_info is a string (JSON)
+        if isinstance(misc_info, str):
+            try:
+                misc_info = json.loads(misc_info)
+            except:
+                misc_info = {}
+
+        # Get metric hierarchy groups
+        metric_hierarchy_groups = misc_info.get('metric_hierarchy_groups', [])
+        logger.info(f"metric_hierarchy_groups: {metric_hierarchy_groups}")
 
         if metric_hierarchy_groups:
             # Find which group the selected metric belongs to
             for group in metric_hierarchy_groups:
                 if metric in group:
-                    driver_metrics = group
+                    driver_metrics = list(group)  # Make a copy
                     logger.info(f"Found metric group for '{metric}': {driver_metrics}")
                     break
 
@@ -1421,7 +1438,7 @@ def metric_drivers(parameters: SkillInput):
             logger.info("No metric_hierarchy_groups found in dataset misc_info")
 
     except Exception as e:
-        logger.warning(f"Could not retrieve metric hierarchy groups: {e}")
+        logger.warning(f"Could not retrieve metric hierarchy groups: {e}", exc_info=True)
 
     # Run analysis
     analysis = FPAVarianceAnalysis(
@@ -1464,32 +1481,56 @@ def metric_drivers(parameters: SkillInput):
     viz_list = []
     export_data = {}
 
-    # Tab 1: Waterfall Chart + Summary Table
-    waterfall_data = analysis.create_waterfall_chart_data()
+    # Detect if this is an expense metric (skip PVM waterfall for expenses)
+    expense_keywords = ['expense', 'cogs', 'cost', 'g_a_', 'opex', 'selling', 'marketing_expense', 'deduction']
+    is_expense_metric = any(kw in metric.lower() for kw in expense_keywords)
+    logger.info(f"Metric '{metric}' is_expense_metric: {is_expense_metric}")
+
+    # Tab 1: Waterfall Chart + Summary Table (skip waterfall for expenses)
     summary_table = analysis.get_summary_table()
 
-    logger.info(f"Waterfall data: {waterfall_data}")
-    logger.info(f"Summary table: {summary_table}")
+    if is_expense_metric:
+        # For expense metrics: show summary table only (no PVM waterfall - doesn't make sense for expenses)
+        logger.info("Skipping PVM waterfall chart for expense metric")
+        if summary_table:
+            metric_display = format_display_name(metric)
+            general_vars = {
+                "headline": f"{metric_display} Variance Analysis",
+                "sub_headline": f"{period} | Actuals vs {comparison_type}",
+                "exec_summary": insights
+            }
 
-    if waterfall_data and summary_table:
-        metric_display = format_display_name(metric)
-        general_vars = {
-            "headline": f"{metric_display} Variance Analysis",
-            "sub_headline": f"{period} | Actuals vs {comparison_type}",
-            "exec_summary": insights
-        }
-
-        layout_vars = {**general_vars, **waterfall_data, **summary_table}
-
-        logger.info(f"Layout vars keys: {layout_vars.keys()}")
-        logger.info(f"Chart data sample: {layout_vars.get('chart_data', 'MISSING')}")
-        logger.info(f"Table data sample: {layout_vars.get('data', 'MISSING')}")
-
-        rendered = wire_layout(json.loads(WATERFALL_CHART_LAYOUT), layout_vars)
-        viz_list.append(SkillVisualization(title=f"{metric_display} Analysis", layout=rendered))
-        export_data["PVM_Summary"] = pd.DataFrame(summary_table['data'], columns=['', 'Current Period', comparison_type, 'Change ($)', 'Change (%)'])
+            # Use horizontal bar layout with just the table (no chart)
+            layout_vars = {**general_vars, **summary_table, 'chart_categories': [], 'chart_data': [], 'chart_y_axis': {}, 'chart_title': ''}
+            rendered = wire_layout(json.loads(HORIZONTAL_BAR_LAYOUT), layout_vars)
+            viz_list.append(SkillVisualization(title=f"{metric_display} Analysis", layout=rendered))
+            export_data["Expense_Summary"] = pd.DataFrame(summary_table['data'], columns=['', 'Current Period', comparison_type, 'Change ($)', 'Change (%)'])
     else:
-        logger.error(f"Missing waterfall data or summary table - waterfall: {waterfall_data is not None}, table: {summary_table is not None}")
+        # For revenue/profit metrics: show PVM waterfall chart
+        waterfall_data = analysis.create_waterfall_chart_data()
+
+        logger.info(f"Waterfall data: {waterfall_data}")
+        logger.info(f"Summary table: {summary_table}")
+
+        if waterfall_data and summary_table:
+            metric_display = format_display_name(metric)
+            general_vars = {
+                "headline": f"{metric_display} Variance Analysis",
+                "sub_headline": f"{period} | Actuals vs {comparison_type}",
+                "exec_summary": insights
+            }
+
+            layout_vars = {**general_vars, **waterfall_data, **summary_table}
+
+            logger.info(f"Layout vars keys: {layout_vars.keys()}")
+            logger.info(f"Chart data sample: {layout_vars.get('chart_data', 'MISSING')}")
+            logger.info(f"Table data sample: {layout_vars.get('data', 'MISSING')}")
+
+            rendered = wire_layout(json.loads(WATERFALL_CHART_LAYOUT), layout_vars)
+            viz_list.append(SkillVisualization(title=f"{metric_display} Analysis", layout=rendered))
+            export_data["PVM_Summary"] = pd.DataFrame(summary_table['data'], columns=['', 'Current Period', comparison_type, 'Change ($)', 'Change (%)'])
+        else:
+            logger.error(f"Missing waterfall data or summary table - waterfall: {waterfall_data is not None}, table: {summary_table is not None}")
 
     # Tab 2+: Horizontal Bar Charts for each dimension
     for dimension in breakout_dimensions:
