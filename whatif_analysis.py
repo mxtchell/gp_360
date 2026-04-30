@@ -263,6 +263,25 @@ PRICE_COL_MAPPING = {
     "brand": "Brand"
 }
 
+# Metric display name mapping for user-friendly error messages
+METRIC_DISPLAY_NAMES = {
+    "cogs": "COGS",
+    "marketing_spend": "Marketing Spend",
+    "marketing_expense": "Marketing Expense",
+    "marketing": "Marketing",
+    "revenue": "Revenue",
+    "gross_profit": "Gross Profit",
+    "net_sales": "Net Sales",
+}
+
+def _format_metric_name(metric: str) -> str:
+    """Format raw metric name to user-friendly display name."""
+    metric_lower = metric.lower()
+    if metric_lower in METRIC_DISPLAY_NAMES:
+        return METRIC_DISPLAY_NAMES[metric_lower]
+    # Fallback: title case with underscores replaced by spaces
+    return metric.replace('_', ' ').title()
+
 
 @skill(
     name="FP&A What-If Analysis",
@@ -270,8 +289,8 @@ PRICE_COL_MAPPING = {
     description="Analyze the impact of cost or spend changes on key financial metrics like COGS, Marketing Spend, or other configurable metrics. Model future projection scenarios by applying percentage changes to cost components and see forecasted vs estimated impacts by dimension.",
     capabilities="Financial what-if scenario analysis: Model impact of cost changes on metrics like COGS (material, labor, overheads, logistics, commodities) or Marketing Spend (digital, traditional, trade, brand). Supports future projection scenarios - forecast how metric changes would impact financials. Shows forecasted vs estimated values with detailed breakdown.",
     limitations="Requires a breakout dimension for analysis. Requires at least one component change in price_change_scenario.",
-    example_questions="What would be the impact of a 5% increase in cocoa price on COGS? How would a 10% increase in digital marketing spend affect total marketing by region? What if we increase trade marketing by 15% next quarter? Model a scenario where labor costs rise 8% - what's the COGS impact?",
-    parameter_guidance="Specify the metric to analyze (cogs, marketing_spend, etc.). Provide cost component changes in price_change_scenario as JSON like {'cocoa': 0.05} for 5% increase, or {'digital': 0.10, 'trade': 0.15} for multiple changes. Values are decimal percentages (0.05 = 5%). Use for future projections by specifying expected cost increases.",
+    example_questions="What would be the impact of a 5% increase in cocoa price on COGS? How would a 10% increase in digital marketing spend affect total marketing by region? What if we increase trade marketing by 15% next quarter? Model a scenario where labor costs rise 8% - what's the COGS impact by category?",
+    parameter_guidance="Specify the metric to analyze (cogs, marketing_spend, etc.). Provide cost component changes in price_change_scenario as JSON like {'cocoa': 0.05} for 5% increase, or {'digital': 0.10, 'trade': 0.15} for multiple changes. Values are decimal percentages (0.05 = 5%). Use for future projections by specifying expected cost increases. For 'next quarter' use Q1 2026.",
     parameters=[
         SkillParameter(
             name="metric",
@@ -284,13 +303,13 @@ PRICE_COL_MAPPING = {
             name="periods",
             constrained_to="date_filter",
             is_multi=True,
-            description="Time period for analysis or future projection (e.g., 'Q3 2024', 'Q1 2025' for forecasting)"
+            description="Time period for analysis or future projection. Use 'Q1 2026' for 'next quarter'. Examples: 'Q3 2024', 'Q1 2026'."
         ),
         SkillParameter(
             name="breakout",
             is_multi=False,
             constrained_to="dimensions",
-            description="Breakout dimension for analysis (e.g., 'category', 'region', 'brand')",
+            description="Breakout dimension for analysis (e.g., 'category', 'region')",
             default_value="category"
         ),
         SkillParameter(
@@ -301,7 +320,7 @@ PRICE_COL_MAPPING = {
             name="other_filters",
             constrained_to="filters",
             is_multi=True,
-            description="Additional filters (region, brand, etc.)"
+            description="Additional filters (region, category, etc.)"
         ),
         SkillParameter(
             name="whatif_layout",
@@ -567,7 +586,11 @@ class WhatIfAnalysisEngine:
 
         df = result.df if hasattr(result, 'df') else None
         if df is None or df.empty:
-            raise ValueError(f"No {self.metric.upper()} data found for period {self.periods[0]}")
+            friendly_metric = _format_metric_name(self.metric)
+            raise ValueError(
+                f"No {friendly_metric} data available for {self.periods[0]}. "
+                f"Please try a different time period or check your filter selections."
+            )
 
         return df
 
