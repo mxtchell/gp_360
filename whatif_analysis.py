@@ -286,17 +286,24 @@ def _format_metric_name(metric: str) -> str:
 @skill(
     name="FP&A What-If Analysis",
     llm_name="What-If Scenario Analysis",
-    description="Analyze the impact of cost or spend changes on key financial metrics like COGS, Marketing Spend, or other configurable metrics. Model future projection scenarios by applying percentage changes to cost components and see forecasted vs estimated impacts by dimension.",
-    capabilities="Financial what-if scenario analysis: Model impact of cost changes on metrics like COGS (material, labor, overheads, logistics, commodities) or Marketing Spend (digital, traditional, trade, brand). Supports future projection scenarios - forecast how metric changes would impact financials. Shows forecasted vs estimated values with detailed breakdown.",
-    limitations="Requires a breakout dimension for analysis. Requires at least one component change in price_change_scenario.",
-    example_questions="What would be the impact of a 5% increase in cocoa price on COGS? How would a 10% increase in digital marketing spend affect total marketing by region? What if we increase trade marketing by 15% next quarter? Model a scenario where labor costs rise 8% - what's the COGS impact by category?",
-    parameter_guidance="Specify the metric to analyze (cogs, marketing_spend, etc.). Provide cost component changes in price_change_scenario as JSON like {'cocoa': 0.05} for 5% increase, or {'digital': 0.10, 'trade': 0.15} for multiple changes. Values are decimal percentages (0.05 = 5%). IMPORTANT: Data is only available through Q1 2026 (March 2026). For 'next quarter', 'upcoming quarter', or any future projection, ALWAYS use 'Q1 2026' as the base period since that is the most recent data available.",
+    description="Analyze the impact of cost changes on financial metrics OR model market share impact from price changes. Supports COGS/Marketing cost scenarios and price elasticity market share analysis.",
+    capabilities="Two analysis types: (1) Cost Impact - model cost changes on COGS, Marketing Spend etc. (2) Market Share Impact - model how price increases affect market share using price elasticity. Shows forecasted vs estimated values with detailed breakdown by dimension.",
+    limitations="Requires a breakout dimension for analysis. Cost analysis requires price_change_scenario. Market share analysis requires price_change_pct.",
+    example_questions="What would be the impact of a 5% increase in cocoa price on COGS? What will be the impact on NA market share if we increase prices by 10%? How would a 10% price increase affect our market share by category? Model market share impact of 15% price hike in EMEA.",
+    parameter_guidance="For cost analysis: use analysis_type='cost_impact', specify metric (cogs, marketing_spend) and price_change_scenario. For market share analysis: use analysis_type='market_share', specify price_change_pct (e.g., 0.10 for 10% increase). IMPORTANT: Data is only available through Q1 2026. For 'next quarter', use 'Q1 2026'.",
     parameters=[
+        SkillParameter(
+            name="analysis_type",
+            is_multi=False,
+            constrained_values=["cost_impact", "market_share"],
+            description="Type of analysis: 'cost_impact' for COGS/expense modeling, 'market_share' for price elasticity impact on market share.",
+            default_value="cost_impact"
+        ),
         SkillParameter(
             name="metric",
             is_multi=False,
             constrained_to="metrics",
-            description="The metric to analyze (e.g., 'cogs', 'marketing_spend'). Determines which cost components are available.",
+            description="The metric to analyze. For cost_impact: 'cogs', 'marketing_spend'. For market_share: 'gross_revenue_share' or 'units_carton_share'.",
             default_value="cogs"
         ),
         SkillParameter(
@@ -313,8 +320,18 @@ def _format_metric_name(metric: str) -> str:
             default_value="category"
         ),
         SkillParameter(
+            name="price_change_pct",
+            description="For market_share analysis: Price change as decimal (0.10 = 10% increase, -0.05 = 5% decrease). Required for market share analysis.",
+            default_value=None
+        ),
+        SkillParameter(
+            name="price_elasticity",
+            description="For market_share analysis: Price elasticity coefficient. Default -0.34 means 10% price increase = 3.4% market share decline. Negative value = inverse relationship.",
+            default_value=-0.34
+        ),
+        SkillParameter(
             name="price_change_scenario",
-            description="JSON object with component changes as decimal percentages. For COGS: 'cocoa', 'sugar', 'wheat', 'other_materials', 'material', 'labor', 'overheads', 'logistics'. For Marketing: 'digital', 'traditional', 'trade', 'brand'. Example: {'cocoa': 0.05} or {'digital': 0.15, 'trade': 0.10}."
+            description="For cost_impact analysis: JSON object with component changes as decimal percentages. For COGS: 'cocoa', 'sugar', 'wheat', 'material', 'labor', 'overheads', 'logistics'. For Marketing: 'digital', 'traditional', 'trade', 'brand'. Example: {'cocoa': 0.05}."
         ),
         SkillParameter(
             name="other_filters",
@@ -352,6 +369,7 @@ def whatif_analysis(parameters: SkillInput):
     print(f"Skill received following parameters: {parameters.arguments}")
 
     # Parse parameters
+    analysis_type = getattr(parameters.arguments, 'analysis_type', 'cost_impact') or 'cost_impact'
     metric = parameters.arguments.metric if hasattr(parameters.arguments, 'metric') and parameters.arguments.metric else 'cogs'
     periods = parameters.arguments.periods if hasattr(parameters.arguments, 'periods') else []
     breakout = parameters.arguments.breakout if hasattr(parameters.arguments, 'breakout') else 'category'
@@ -359,32 +377,9 @@ def whatif_analysis(parameters: SkillInput):
     whatif_layout = parameters.arguments.whatif_layout if hasattr(parameters.arguments, 'whatif_layout') else WHATIF_LAYOUT
     table_name = parameters.arguments.table_name if hasattr(parameters.arguments, 'table_name') and parameters.arguments.table_name else None
 
-    # Parse price change scenario
-    price_scenario = {}
-    if hasattr(parameters.arguments, 'price_change_scenario') and parameters.arguments.price_change_scenario:
-        try:
-            if isinstance(parameters.arguments.price_change_scenario, dict):
-                price_scenario = parameters.arguments.price_change_scenario
-            else:
-                price_scenario = json.loads(parameters.arguments.price_change_scenario)
-            # Map to display names
-            price_scenario = {PRICE_COL_MAPPING.get(k, k): float(v) for k, v in price_scenario.items()}
-        except Exception as e:
-            logger.error(f"Error parsing price scenario: {e}")
-            return SkillOutput(
-                final_prompt="Error parsing price_change_scenario parameter. Must be valid JSON.",
-                narrative="Error: Invalid price_change_scenario format. Use format like {'cocoa': 0.05} for 5% increase.",
-                visualizations=[],
-                parameter_display_descriptions=[]
-            )
-
-    if not price_scenario:
-        return SkillOutput(
-            final_prompt="No price changes specified.",
-            narrative="Error: You must specify at least one cost change in price_change_scenario parameter.",
-            visualizations=[],
-            parameter_display_descriptions=[]
-        )
+    # Market share specific parameters
+    price_change_pct = getattr(parameters.arguments, 'price_change_pct', None)
+    price_elasticity = getattr(parameters.arguments, 'price_elasticity', -0.34) or -0.34
 
     # Get AnswerRocketClient
     try:
@@ -398,28 +393,147 @@ def whatif_analysis(parameters: SkillInput):
             parameter_display_descriptions=[]
         )
 
-    # Create analysis engine
-    analyzer = WhatIfAnalysisEngine(
-        client=client,
-        metric=metric,
-        periods=periods,
-        breakout=breakout,
-        filters=other_filters,
-        price_scenario=price_scenario,
-        table_name=table_name
-    )
+    # Route based on analysis type
+    if analysis_type == 'market_share':
+        # Market share impact analysis
+        if price_change_pct is None:
+            return SkillOutput(
+                final_prompt="Price change percentage is required for market share analysis.",
+                narrative="Error: You must specify price_change_pct (e.g., 0.10 for 10% increase) for market share analysis.",
+                visualizations=[],
+                parameter_display_descriptions=[]
+            )
 
-    # Run analysis
-    try:
-        results_df = analyzer.run()
-    except Exception as e:
-        logger.error(f"Error running what-if analysis: {e}", exc_info=True)
-        return SkillOutput(
-            final_prompt=f"Error running analysis: {str(e)}",
-            narrative=f"Error: {str(e)}",
-            visualizations=[],
-            parameter_display_descriptions=[]
+        # Parse price_change_pct
+        try:
+            price_change_pct = float(price_change_pct)
+        except (ValueError, TypeError):
+            return SkillOutput(
+                final_prompt="Invalid price_change_pct. Must be a decimal number.",
+                narrative="Error: price_change_pct must be a decimal (e.g., 0.10 for 10%).",
+                visualizations=[],
+                parameter_display_descriptions=[]
+            )
+
+        # Create market share analyzer
+        analyzer = MarketShareWhatIfEngine(
+            client=client,
+            periods=periods,
+            breakout=breakout,
+            filters=other_filters,
+            price_change_pct=price_change_pct,
+            price_elasticity=float(price_elasticity),
+            table_name=table_name
         )
+
+        # Run market share analysis
+        try:
+            results_df = analyzer.run()
+        except Exception as e:
+            logger.error(f"Error running market share what-if analysis: {e}", exc_info=True)
+            return SkillOutput(
+                final_prompt=f"Error running analysis: {str(e)}",
+                narrative=f"Error: {str(e)}",
+                visualizations=[],
+                parameter_display_descriptions=[]
+            )
+
+        # Create visualization data for market share
+        chart_data = analyzer.create_chart_data(results_df)
+        table_data = analyzer.create_table_data(results_df)
+
+        # Generate insights
+        ar_utils = ArUtils()
+        facts = [{
+            'metric': 'Market Share',
+            'scenario': f"Price change: {price_change_pct:+.0%}",
+            'elasticity': price_elasticity,
+            'breakout': breakout,
+            'results': results_df.to_dict(orient='records')
+        }]
+
+        insight_prompt_rendered = jinja2.Template(parameters.arguments.insight_prompt).render(facts=facts)
+        max_response_prompt = jinja2.Template(parameters.arguments.max_prompt).render(facts=facts)
+        insights = ar_utils.get_llm_response(insight_prompt_rendered)
+
+        # Prepare layout variables
+        layout_vars = {
+            "chart_title": f"Market Share Impact: {price_change_pct:+.0%} Price Change",
+            "chart_categories": chart_data['categories'],
+            "chart_data_series": chart_data['series'],
+            "data": table_data['data'],
+            "col_defs": table_data['columns']
+        }
+
+        rendered_layout = wire_layout(json.loads(whatif_layout), layout_vars)
+
+        param_info = [
+            ParameterDisplayDescription(key="Analysis Type", value="Market Share Impact"),
+            ParameterDisplayDescription(key="Price Change", value=f"{price_change_pct:+.0%}"),
+            ParameterDisplayDescription(key="Price Elasticity", value=f"{price_elasticity}"),
+            ParameterDisplayDescription(key="Period", value=periods[0] if periods else "N/A"),
+            ParameterDisplayDescription(key="Breakout", value=breakout)
+        ]
+
+        return SkillOutput(
+            final_prompt=max_response_prompt,
+            narrative=insights,
+            visualizations=[SkillVisualization(title="Market Share Impact", layout=rendered_layout)],
+            parameter_display_descriptions=param_info,
+            export_data=[ExportData(name="Market Share Impact", data=results_df)]
+        )
+
+    else:
+        # Cost impact analysis (original behavior)
+        # Parse price change scenario
+        price_scenario = {}
+        if hasattr(parameters.arguments, 'price_change_scenario') and parameters.arguments.price_change_scenario:
+            try:
+                if isinstance(parameters.arguments.price_change_scenario, dict):
+                    price_scenario = parameters.arguments.price_change_scenario
+                else:
+                    price_scenario = json.loads(parameters.arguments.price_change_scenario)
+                # Map to display names
+                price_scenario = {PRICE_COL_MAPPING.get(k, k): float(v) for k, v in price_scenario.items()}
+            except Exception as e:
+                logger.error(f"Error parsing price scenario: {e}")
+                return SkillOutput(
+                    final_prompt="Error parsing price_change_scenario parameter. Must be valid JSON.",
+                    narrative="Error: Invalid price_change_scenario format. Use format like {'cocoa': 0.05} for 5% increase.",
+                    visualizations=[],
+                    parameter_display_descriptions=[]
+                )
+
+        if not price_scenario:
+            return SkillOutput(
+                final_prompt="No price changes specified.",
+                narrative="Error: You must specify at least one cost change in price_change_scenario parameter.",
+                visualizations=[],
+                parameter_display_descriptions=[]
+            )
+
+        # Create analysis engine
+        analyzer = WhatIfAnalysisEngine(
+            client=client,
+            metric=metric,
+            periods=periods,
+            breakout=breakout,
+            filters=other_filters,
+            price_scenario=price_scenario,
+            table_name=table_name
+        )
+
+        # Run analysis
+        try:
+            results_df = analyzer.run()
+        except Exception as e:
+            logger.error(f"Error running what-if analysis: {e}", exc_info=True)
+            return SkillOutput(
+                final_prompt=f"Error running analysis: {str(e)}",
+                narrative=f"Error: {str(e)}",
+                visualizations=[],
+                parameter_display_descriptions=[]
+            )
 
     # Create visualization data
     chart_data = analyzer.create_chart_data(results_df)
@@ -488,6 +602,227 @@ def whatif_analysis(parameters: SkillInput):
             ExportData(name=f"{metric_display} What-If Analysis", data=results_df)
         ]
     )
+
+
+class MarketShareWhatIfEngine:
+    """Engine for market share impact analysis based on price elasticity"""
+
+    def __init__(self, client, periods, breakout, filters, price_change_pct, price_elasticity=-0.34, table_name=None):
+        self.client = client
+        self.periods = periods
+        self.breakout = breakout
+        self.filters = filters
+        self.price_change_pct = price_change_pct
+        self.price_elasticity = price_elasticity
+        self.table_name = table_name
+
+        # Get database_id and dataset_id from platform context
+        self.dataset_id = get_dataset_id()
+        dataset = self.client.data.get_dataset(dataset_id=self.dataset_id)
+        self.database_id = dataset.database.database_id
+
+        # Get table name from dataset's fact entity if not provided
+        if not self.table_name:
+            domain_entity = next((x for x in dataset.domain_objects if x.type == "factEntity"), None)
+            if domain_entity and hasattr(domain_entity, 'db_table'):
+                self.table_name = domain_entity.db_table
+            else:
+                self.table_name = getattr(dataset, 'name', None) or 'data'
+
+    def run(self):
+        """Run market share impact analysis"""
+        # Pull current market share data
+        share_df = self._pull_market_share_data()
+
+        # Calculate estimated share after price change
+        results_df = self._calculate_share_impact(share_df)
+
+        return results_df
+
+    def _pull_market_share_data(self):
+        """Pull market share data by breakout dimension"""
+        # Build filter clause
+        filter_clauses = []
+        for f in self.filters:
+            dim = f.get('dim') or f.get('col')
+            op = f.get('op', '=')
+            val = f.get('val')
+
+            if dim and val:
+                if isinstance(val, list):
+                    if len(val) == 1:
+                        filter_clauses.append(f"UPPER({dim}) {op} UPPER('{val[0]}')")
+                    else:
+                        val_str = ", ".join([f"UPPER('{v}')" for v in val])
+                        filter_clauses.append(f"UPPER({dim}) IN ({val_str})")
+                elif isinstance(val, str):
+                    filter_clauses.append(f"UPPER({dim}) {op} UPPER('{val}')")
+                else:
+                    filter_clauses.append(f"{dim} {op} {val}")
+
+        filter_clause = " AND " + " AND ".join(filter_clauses) if filter_clauses else ""
+
+        # Parse period to date range
+        if self.periods and len(self.periods) > 0:
+            period_str = self.periods[0]
+            start_date, end_date = self._parse_period_to_date_range(period_str)
+            logger.info(f"Market share analysis - Parsed period '{period_str}' to date range: {start_date} to {end_date}")
+        else:
+            raise ValueError("Period is required but was not provided")
+
+        # Query market share - try gross_revenue_share first, fall back to calculating from gross_revenue
+        # First try to get share directly
+        share_query = f"""
+        SELECT {self.breakout},
+               SUM(gross_revenue) as gross_revenue,
+               SUM(gross_revenue_share) as market_share
+        FROM {self.table_name}
+        WHERE start_date BETWEEN '{start_date}' AND '{end_date}'
+        AND scenario = 'actuals'
+        {filter_clause}
+        GROUP BY {self.breakout}
+        """
+
+        logger.info(f"Market share query: {share_query}")
+        result = self.client.data.execute_sql_query(
+            database_id=self.database_id,
+            sql_query=share_query,
+            row_limit=10000
+        )
+
+        df = result.df if hasattr(result, 'df') else None
+        if df is None or df.empty:
+            raise ValueError(
+                f"No market share data available for {self.periods[0]}. "
+                f"Please try a different time period or check your filter selections."
+            )
+
+        # If market_share column is all null/zero, calculate from revenue
+        if df['market_share'].isna().all() or (df['market_share'] == 0).all():
+            total_revenue = df['gross_revenue'].sum()
+            df['market_share'] = (df['gross_revenue'] / total_revenue * 100) if total_revenue > 0 else 0
+            logger.info("Calculated market share from gross_revenue")
+
+        return df
+
+    def _calculate_share_impact(self, df):
+        """Calculate market share impact based on price elasticity
+
+        Formula: share_change = current_share * price_elasticity * price_change_pct
+        New share = current_share + share_change
+        """
+        df = df.copy()
+
+        # Current share (forecasted - what we have now)
+        df['Forecasted'] = df['market_share']
+
+        # Calculate share impact using elasticity
+        # elasticity is typically negative (price up = share down)
+        # share_change_pct = elasticity * price_change_pct
+        share_change_pct = self.price_elasticity * self.price_change_pct
+
+        # Estimated share after price change
+        df['Estimated'] = df['Forecasted'] * (1 + share_change_pct)
+
+        # Change in share points
+        df['Change'] = df['Estimated'] - df['Forecasted']
+
+        # Format for display
+        df['Forecasted_Display'] = df['Forecasted'].apply(lambda x: f"{x:.2f}%")
+        df['Estimated_Display'] = df['Estimated'].apply(lambda x: f"{x:.2f}%")
+        df['Change_Display'] = df['Change'].apply(lambda x: f"{x:+.2f}%")
+
+        # Clean up breakout column name for display
+        df[self.breakout] = df[self.breakout].str.replace('_', ' ').str.title()
+
+        logger.info(f"Market share impact calculated: price_change={self.price_change_pct:+.0%}, elasticity={self.price_elasticity}, share_change={share_change_pct:+.1%}")
+
+        return df
+
+    def _parse_period_to_date_range(self, period_str):
+        """Convert period string to date range for SQL query"""
+        from dateutil.parser import parse
+
+        if not period_str:
+            raise ValueError("Period is required but was not provided")
+
+        period_lower = period_str.lower().strip()
+
+        # Handle quarters (Q1 2024, Q2 2025, etc.)
+        if period_lower.startswith('q'):
+            parts = period_str.split()
+            quarter = int(parts[0][1])
+            year = int(parts[1])
+
+            quarter_map = {
+                1: ('01-01', '03-31'),
+                2: ('04-01', '06-30'),
+                3: ('07-01', '09-30'),
+                4: ('10-01', '12-31')
+            }
+            start_month_day, end_month_day = quarter_map[quarter]
+            return f"{year}-{start_month_day}", f"{year}-{end_month_day}"
+
+        # Handle single months
+        try:
+            parsed_date = parse(period_str, fuzzy=True)
+            year = parsed_date.year
+            month = parsed_date.month
+
+            if month == 12:
+                last_day = 31
+            elif month in [4, 6, 9, 11]:
+                last_day = 30
+            elif month == 2:
+                if (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0):
+                    last_day = 29
+                else:
+                    last_day = 28
+            else:
+                last_day = 31
+
+            return f"{year}-{month:02d}-01", f"{year}-{month:02d}-{last_day}"
+        except:
+            return period_str, period_str
+
+    def create_chart_data(self, df):
+        """Create chart data for market share impact visualization"""
+        categories = df[self.breakout].tolist()
+
+        series = [
+            {
+                'name': 'Forecasted',
+                'data': df['Forecasted'].round(2).tolist(),
+                'color': '#5DADE2'
+            },
+            {
+                'name': 'Estimated',
+                'data': df['Estimated'].round(2).tolist(),
+                'color': '#8E44AD'
+            }
+        ]
+
+        return {'categories': categories, 'series': series}
+
+    def create_table_data(self, df):
+        """Create table data for market share impact visualization"""
+        columns = [
+            {'name': self.breakout.replace('_', ' ').title()},
+            {'name': 'Forecasted', 'headerGroup': 'Market Share'},
+            {'name': 'Estimated', 'headerGroup': 'Market Share'},
+            {'name': 'Change'}
+        ]
+
+        data = []
+        for _, row in df.iterrows():
+            data.append([
+                row[self.breakout],
+                row['Forecasted_Display'],
+                row['Estimated_Display'],
+                row['Change_Display']
+            ])
+
+        return {'columns': columns, 'data': data}
 
 
 class WhatIfAnalysisEngine:
