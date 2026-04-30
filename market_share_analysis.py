@@ -29,12 +29,24 @@ EXTENDED_PARAMETER_GUIDANCE = (
     f"use manufacturer='{DEFAULT_MANUFACTURER}' in other_filters."
 )
 
+# Custom description that excludes impact/what-if questions
+CUSTOM_DESCRIPTION = (
+    "Analyze CURRENT market share position and trends. Shows share by category, region, brand. "
+    "DO NOT use this skill for 'impact' or 'what if' questions about price changes - use FP&A What-If Analysis instead."
+)
+
+CUSTOM_LIMITATIONS = (
+    "This skill shows CURRENT market share only. "
+    "DO NOT use for: 'what will be the impact', 'what if we increase prices', 'how would price changes affect share'. "
+    "For impact/what-if scenarios, use FP&A What-If Analysis skill."
+)
+
 @skill(
     name=market_share_analysis_config.name,
     llm_name=market_share_analysis_config.llm_name,
-    description=market_share_analysis_config.description,
+    description=CUSTOM_DESCRIPTION,
     capabilities=market_share_analysis_config.capabilities,
-    limitations=market_share_analysis_config.limitations,
+    limitations=CUSTOM_LIMITATIONS,
     example_questions=market_share_analysis_config.example_questions,
     parameter_guidance=EXTENDED_PARAMETER_GUIDANCE,
     parameters=[

@@ -285,12 +285,12 @@ def _format_metric_name(metric: str) -> str:
 
 @skill(
     name="FP&A What-If Analysis",
-    llm_name="What-If Scenario Analysis",
-    description="Analyze the impact of cost changes on financial metrics OR model market share impact from price changes. Supports COGS/Marketing cost scenarios and price elasticity market share analysis.",
-    capabilities="Two analysis types: (1) Cost Impact - model cost changes on COGS, Marketing Spend etc. (2) Market Share Impact - model how price increases affect market share using price elasticity. Shows forecasted vs estimated values with detailed breakdown by dimension.",
-    limitations="Requires a breakout dimension for analysis. Cost analysis requires price_change_scenario. Market share analysis requires price_change_pct.",
-    example_questions="What would be the impact of a 5% increase in cocoa price on COGS? What will be the impact on NA market share if we increase prices by 10%? How would a 10% price increase affect our market share by category? Model market share impact of 15% price hike in EMEA.",
-    parameter_guidance="For cost analysis: use analysis_type='cost_impact', specify metric (cogs, marketing_spend) and price_change_scenario. For market share analysis: use analysis_type='market_share', specify price_change_pct (e.g., 0.10 for 10% increase). IMPORTANT: Data is only available through Q1 2026. For 'next quarter', use 'Q1 2026'.",
+    llm_name="What-If Scenario Analysis - Price Impact on Market Share",
+    description="USE THIS SKILL for 'what will be the impact' questions about price changes and market share. Models how price increases affect market share using price elasticity. Also supports cost impact scenarios. Run ONCE - do NOT use Market Share Analysis for impact questions.",
+    capabilities="MARKET SHARE IMPACT FROM PRICE CHANGES: Model how price increases/decreases affect market share by category/region. Uses price elasticity to calculate share decline from price hikes. Also supports cost impact analysis for COGS/Marketing. ONE call shows all results - do NOT run multiple times.",
+    limitations="Run this skill ONCE per question. Do NOT run Market Share Analysis for 'impact' or 'what if' questions - use this skill instead.",
+    example_questions="What will be the impact on NA market share if we increase prices by 10%? How would a 10% price increase affect our market share by category? What happens to market share if we raise prices 15% in EMEA? Model price impact on share.",
+    parameter_guidance="FOR MARKET SHARE IMPACT QUESTIONS: Use analysis_type='market_share', set price_change_pct (0.10 = 10% increase). Run ONCE - shows all categories together. Do NOT run Market Share Analysis skill for impact questions. For cost analysis: use analysis_type='cost_impact'. IMPORTANT: Use 'Q1 2026' for latest data.",
     parameters=[
         SkillParameter(
             name="analysis_type",
