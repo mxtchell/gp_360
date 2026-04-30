@@ -262,6 +262,22 @@ def trend(parameters: SkillInput):
             param_dict["breakouts"] = ["scenario"]
         elif "scenario" not in param_dict["breakouts"]:
             param_dict["breakouts"] = list(param_dict["breakouts"]) + ["scenario"]
+    else:
+        # REQUIREMENT: Force filter to 'actuals' scenario unless user specifies budget or forecast
+        # Check if scenario filter already exists in other_filters
+        existing_scenario_filter = False
+        if param_dict["other_filters"]:
+            for f in param_dict["other_filters"]:
+                if isinstance(f, dict) and f.get('dim', '').lower() == 'scenario':
+                    existing_scenario_filter = True
+                    break
+
+        # Add scenario = 'actuals' filter if not already present
+        if not existing_scenario_filter:
+            if param_dict["other_filters"] is None:
+                param_dict["other_filters"] = []
+            param_dict["other_filters"] = list(param_dict["other_filters"]) + [{'dim': 'scenario', 'op': '=', 'val': ['actuals']}]
+            logger.info("Auto-added scenario='actuals' filter (no compare_metrics specified)")
 
     env = SimpleNamespace(**param_dict)
     TrendTemplateParameterSetup(env=env)
