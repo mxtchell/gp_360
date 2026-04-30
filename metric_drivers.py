@@ -587,7 +587,7 @@ class FPAVarianceAnalysis:
     """FP&A Variance Analysis with Price-Volume-Mix Decomposition"""
 
     def __init__(self, client, metric, period, comparison_type, breakout_dimensions=None,
-                 top_n=10, other_filters=None, table_name=None):
+                 top_n=10, other_filters=None, table_name=None, driver_metrics=None):
         self.client = client
         self.metric = metric
         self.period = period
@@ -596,6 +596,7 @@ class FPAVarianceAnalysis:
         self.top_n = top_n
         self.other_filters = other_filters or []
         self.table_name = table_name
+        self.driver_metrics = driver_metrics or []  # Metrics to show in summary table (from metric groups)
 
         self.actuals_df = None
         self.comparison_df = None
@@ -617,6 +618,7 @@ class FPAVarianceAnalysis:
                 self.table_name = getattr(dataset, 'name', None) or 'data'
 
         logger.info(f"FPAVarianceAnalysis initialized with database_id={self.database_id}, dataset_id={self.dataset_id}, table_name={self.table_name}")
+        logger.info(f"Driver metrics for display: {self.driver_metrics}")
 
     def get_comparison_scenario(self):
         """Map comparison type to scenario value
@@ -1118,28 +1120,43 @@ class FPAVarianceAnalysis:
     def get_summary_table(self):
         """Create driver analysis table with Current Period, Compare Period, Change columns
 
-        Hardcoded metrics to display:
-        - gross_revenue (main metric)
-        - brand_contribution_margin
-        - brand_contribution_margin (%)
-        - gross_profit
-        - net_revenue
-        - price
-        - units_carton
+        Uses driver_metrics from metric_hierarchy_groups if available,
+        otherwise falls back to hardcoded defaults.
         """
         if not self.pvm_results:
             return None
 
-        # Hardcoded metrics to show in table
-        metrics_to_show = [
-            ('Gross Revenue', 'gross_revenue', True),  # (Display Name, Column Name, Is Currency)
-            ('  Brand Contribution Margin', 'brand_contribution_margin', True),
-            ('  Brand Contribution Margin %', 'brand_contribution_margin', False),  # Will calculate percentage
-            ('  Gross Profit', 'gross_profit', True),
-            ('  Net Revenue', 'net_revenue', True),
-            ('  Price', 'price', True),
-            ('  Units (Carton)', 'units_carton', False)
-        ]
+        # Use driver_metrics if provided (from metric_hierarchy_groups), otherwise use defaults
+        if self.driver_metrics:
+            # Build metrics_to_show from driver_metrics
+            # Format: (Display Name, Column Name, Is Currency)
+            metrics_to_show = []
+
+            # Add main metric first
+            main_display = format_display_name(self.metric)
+            metrics_to_show.append((main_display, self.metric, True))
+
+            # Add driver metrics (indented to show hierarchy)
+            for driver_metric in self.driver_metrics:
+                if driver_metric != self.metric:  # Don't duplicate the main metric
+                    driver_display = f"  {format_display_name(driver_metric)}"
+                    # Determine if currency based on metric name
+                    is_currency = not any(x in driver_metric.lower() for x in ['units', 'volume', 'count', 'rate', 'ratio', 'pct', 'percent'])
+                    metrics_to_show.append((driver_display, driver_metric, is_currency))
+
+            logger.info(f"Using metric group drivers: {[m[1] for m in metrics_to_show]}")
+        else:
+            # Fallback to hardcoded defaults
+            metrics_to_show = [
+                ('Gross Revenue', 'gross_revenue', True),  # (Display Name, Column Name, Is Currency)
+                ('  Brand Contribution Margin', 'brand_contribution_margin', True),
+                ('  Brand Contribution Margin %', 'brand_contribution_margin', False),  # Will calculate percentage
+                ('  Gross Profit', 'gross_profit', True),
+                ('  Net Revenue', 'net_revenue', True),
+                ('  Price', 'price', True),
+                ('  Units (Carton)', 'units_carton', False)
+            ]
+            logger.info("Using default hardcoded metrics (no metric groups configured)")
 
         data = []
 
@@ -1380,6 +1397,32 @@ def metric_drivers(parameters: SkillInput):
             warnings=[str(e)]
         )
 
+    # Get metric hierarchy groups from dataset misc_info
+    driver_metrics = []
+    try:
+        dataset_id = get_dataset_id()
+        dataset = client.data.get_dataset(dataset_id=dataset_id)
+        metadata = dataset.misc_info if hasattr(dataset, 'misc_info') else {}
+
+        # Get metric hierarchy and groups
+        metric_hierarchy_groups = metadata.get('metric_hierarchy_groups', [])
+
+        if metric_hierarchy_groups:
+            # Find which group the selected metric belongs to
+            for group in metric_hierarchy_groups:
+                if metric in group:
+                    driver_metrics = group
+                    logger.info(f"Found metric group for '{metric}': {driver_metrics}")
+                    break
+
+            if not driver_metrics:
+                logger.info(f"Metric '{metric}' not found in any group, will use defaults")
+        else:
+            logger.info("No metric_hierarchy_groups found in dataset misc_info")
+
+    except Exception as e:
+        logger.warning(f"Could not retrieve metric hierarchy groups: {e}")
+
     # Run analysis
     analysis = FPAVarianceAnalysis(
         client=client,
@@ -1389,7 +1432,8 @@ def metric_drivers(parameters: SkillInput):
         breakout_dimensions=breakout_dimensions,
         top_n=top_n,
         other_filters=other_filters,
-        table_name=table_name
+        table_name=table_name,
+        driver_metrics=driver_metrics
     )
 
     try:
