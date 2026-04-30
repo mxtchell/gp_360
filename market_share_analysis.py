@@ -1,4 +1,5 @@
 from __future__ import annotations
+import ast
 from dataclasses import dataclass
 import json
 from types import SimpleNamespace
@@ -18,6 +19,16 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+# Default manufacturer for "my" market share queries
+DEFAULT_MANUFACTURER = "Apex International"
+
+# Extended parameter guidance with default manufacturer
+EXTENDED_PARAMETER_GUIDANCE = (
+    (market_share_analysis_config.parameter_guidance or "") +
+    f" IMPORTANT: When users ask for 'my' market share, 'our' market share, or refer to their own company's performance, "
+    f"use manufacturer='{DEFAULT_MANUFACTURER}' in other_filters."
+)
+
 @skill(
     name=market_share_analysis_config.name,
     llm_name=market_share_analysis_config.llm_name,
@@ -25,7 +36,7 @@ logger = logging.getLogger(__name__)
     capabilities=market_share_analysis_config.capabilities,
     limitations=market_share_analysis_config.limitations,
     example_questions=market_share_analysis_config.example_questions,
-    parameter_guidance=market_share_analysis_config.parameter_guidance,
+    parameter_guidance=EXTENDED_PARAMETER_GUIDANCE,
     parameters=[
         SkillParameter(
             name="metric",
@@ -132,8 +143,13 @@ def market_share_analysis(parameters: SkillInput):
                 try:
                     param_dict[key] = json.loads(param_dict[key])
                 except json.JSONDecodeError:
-                    logger.error(f"Error decoding JSON for parameter: {key}")
-                    param_dict[key] = {}
+                    # Fallback to ast.literal_eval for Python-style dict/list syntax (single quotes)
+                    try:
+                        param_dict[key] = ast.literal_eval(param_dict[key])
+                        logger.info(f"Parsed parameter {key} using ast.literal_eval")
+                    except (ValueError, SyntaxError):
+                        logger.error(f"Error decoding parameter: {key}")
+                        param_dict[key] = {}
 
     # Scenario is locked to "actuals" - don't allow override from parameters
     param_dict["scenario"] = "actuals"
