@@ -1317,17 +1317,17 @@ class FPAVarianceAnalysis:
 @skill(
     name="FP&A Drivers",
     llm_name="Metric Drivers with Price-Volume-Mix Decomposition",
-    description="Analyze variance drivers using Price-Volume-Mix decomposition with waterfall charts and dimensional breakouts. Compare actuals vs Budget, Forecast, or Prior Period.",
-    capabilities="Price-Volume-Mix variance decomposition. Waterfall chart visualization of variance components. Dimensional breakout analysis with horizontal bar charts. Top contributor identification and ranking. Multi-dimensional variance attribution. Comparison vs Budget, Forecast, or Prior Period.",
-    limitations="Requires 'scenario' column in dataset with values: actuals, budget, forecast. Requires 'volume' column for accurate PVM decomposition. Limited to configured metrics and dimensions.",
-    example_questions="What are the revenue drivers for Q3 2024 vs budget? Show me price-volume-mix analysis for sales vs forecast. Which regions contributed most to the revenue variance? Analyze variance drivers by category and customer type. What caused the variance in Q4 vs prior period?",
-    parameter_guidance="Select the metric to analyze (e.g., Revenue, Profit, Units). Choose the time period for analysis (e.g., Q3 2024, 2024, Jan 2024). Choose Budget, Forecast, or Prior Period for comparison. Select dimensions for detailed breakout (e.g., Region, Category, Customer). Specify number of top contributors to display (default 10). Add additional filters as needed (e.g., Region = North, Product = Electronics).",
+    description="Analyze variance drivers for revenue, profit, or expenses. ONE call shows ALL related metrics in the same group automatically. For expense questions, shows ALL expenses (COGS, G&A, Marketing, Selling) together - do NOT run multiple times.",
+    capabilities="Price-Volume-Mix variance decomposition for revenue/profit. Expense comparison analysis showing ALL expense categories together. Dimensional breakout analysis. IMPORTANT: This skill automatically groups related metrics - one call shows all metrics in the group.",
+    limitations="Requires 'scenario' column in dataset. For expenses, ONE call shows all expense metrics together.",
+    example_questions="What are the revenue drivers for Q3 2024 vs budget? What are the main expense categories vs budget? Show me expense variance vs prior period. Analyze profit drivers by region.",
+    parameter_guidance="IMPORTANT: Run this skill ONCE per question. For expense questions, pick ANY expense metric (cogs, marketing_expense, etc.) and the skill automatically shows ALL expense metrics together. Do NOT run multiple times for different expense categories - one call covers all. For revenue questions, pick gross_revenue. For profit questions, pick gross_profit.",
     parameters=[
         SkillParameter(
             name="metric",
             constrained_to="metrics",
             is_multi=False,
-            description="Metric to analyze (e.g., Revenue, Profit)"
+            description="Pick ONE metric from the group. For expenses: use 'cogs' or any expense metric - ALL expenses shown automatically. For revenue: use 'gross_revenue'. For profit: use 'gross_profit'. Do NOT run multiple times."
         ),
         SkillParameter(
             name="period",
