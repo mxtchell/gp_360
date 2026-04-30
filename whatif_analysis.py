@@ -741,18 +741,53 @@ class MarketShareWhatIfEngine:
 
     def _parse_period_to_date_range(self, period_str):
         """Convert period string to date range for SQL query"""
+        import re
         from dateutil.parser import parse
+        from datetime import datetime
+        from calendar import monthrange
 
         if not period_str:
             raise ValueError("Period is required but was not provided")
 
         period_lower = period_str.lower().strip()
 
+        # Handle MAT (Moving Annual Total) periods - "mat q1 2026" = 12 months ending March 2026
+        if period_lower.startswith('mat'):
+            mat_match = re.match(r'mat\s+q(\d)\s+(\d{4})', period_lower)
+            if mat_match:
+                quarter = int(mat_match.group(1))
+                year = int(mat_match.group(2))
+                # MAT Q1 2026 = Apr 2025 to Mar 2026
+                quarter_end_month = quarter * 3
+                end_year = year
+                end_month = quarter_end_month
+                # Start is 12 months before end
+                start_month = end_month + 1
+                start_year = end_year - 1
+                if start_month > 12:
+                    start_month = start_month - 12
+                    start_year = end_year
+                _, last_day = monthrange(end_year, end_month)
+                return f"{start_year}-{start_month:02d}-01", f"{end_year}-{end_month:02d}-{last_day}"
+
+        # Handle date ranges - "Jan 2025 to Dec 2025", "Apr 2025 to Mar 2026"
+        range_match = re.match(r'(.+?)\s+to\s+(.+)', period_lower)
+        if range_match:
+            start_str = range_match.group(1).strip()
+            end_str = range_match.group(2).strip()
+            try:
+                start_date = parse(start_str, fuzzy=True)
+                end_date = parse(end_str, fuzzy=True)
+                _, last_day = monthrange(end_date.year, end_date.month)
+                return f"{start_date.year}-{start_date.month:02d}-01", f"{end_date.year}-{end_date.month:02d}-{last_day}"
+            except:
+                pass  # Fall through to other parsers
+
         # Handle quarters (Q1 2024, Q2 2025, etc.)
-        if period_lower.startswith('q'):
-            parts = period_str.split()
-            quarter = int(parts[0][1])
-            year = int(parts[1])
+        quarter_match = re.match(r'q(\d)\s+(\d{4})', period_lower)
+        if quarter_match:
+            quarter = int(quarter_match.group(1))
+            year = int(quarter_match.group(2))
 
             quarter_map = {
                 1: ('01-01', '03-31'),
@@ -763,24 +798,19 @@ class MarketShareWhatIfEngine:
             start_month_day, end_month_day = quarter_map[quarter]
             return f"{year}-{start_month_day}", f"{year}-{end_month_day}"
 
-        # Handle single months
+        # Handle year-only periods (2024, 2025) - full year Jan 1 to Dec 31
+        year_match = re.match(r'^(\d{4})$', period_lower)
+        if year_match:
+            year = int(year_match.group(1))
+            return f"{year}-01-01", f"{year}-12-31"
+
+        # Handle single months (January 2025, Jan 2025, Mar 2026, etc.)
         try:
             parsed_date = parse(period_str, fuzzy=True)
             year = parsed_date.year
             month = parsed_date.month
 
-            if month == 12:
-                last_day = 31
-            elif month in [4, 6, 9, 11]:
-                last_day = 30
-            elif month == 2:
-                if (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0):
-                    last_day = 29
-                else:
-                    last_day = 28
-            else:
-                last_day = 31
-
+            _, last_day = monthrange(year, month)
             return f"{year}-{month:02d}-01", f"{year}-{month:02d}-{last_day}"
         except:
             return period_str, period_str
@@ -931,18 +961,52 @@ class WhatIfAnalysisEngine:
 
     def _parse_period_to_date_range(self, period_str):
         """Convert period string to date range for SQL query"""
+        import re
         from dateutil.parser import parse
+        from calendar import monthrange
 
         if not period_str:
             raise ValueError("Period is required but was not provided")
 
         period_lower = period_str.lower().strip()
 
+        # Handle MAT (Moving Annual Total) periods - "mat q1 2026" = 12 months ending March 2026
+        if period_lower.startswith('mat'):
+            mat_match = re.match(r'mat\s+q(\d)\s+(\d{4})', period_lower)
+            if mat_match:
+                quarter = int(mat_match.group(1))
+                year = int(mat_match.group(2))
+                # MAT Q1 2026 = Apr 2025 to Mar 2026
+                quarter_end_month = quarter * 3
+                end_year = year
+                end_month = quarter_end_month
+                # Start is 12 months before end
+                start_month = end_month + 1
+                start_year = end_year - 1
+                if start_month > 12:
+                    start_month = start_month - 12
+                    start_year = end_year
+                _, last_day = monthrange(end_year, end_month)
+                return f"{start_year}-{start_month:02d}-01", f"{end_year}-{end_month:02d}-{last_day}"
+
+        # Handle date ranges - "Jan 2025 to Dec 2025", "Apr 2025 to Mar 2026"
+        range_match = re.match(r'(.+?)\s+to\s+(.+)', period_lower)
+        if range_match:
+            start_str = range_match.group(1).strip()
+            end_str = range_match.group(2).strip()
+            try:
+                start_date = parse(start_str, fuzzy=True)
+                end_date = parse(end_str, fuzzy=True)
+                _, last_day = monthrange(end_date.year, end_date.month)
+                return f"{start_date.year}-{start_date.month:02d}-01", f"{end_date.year}-{end_date.month:02d}-{last_day}"
+            except:
+                pass  # Fall through to other parsers
+
         # Handle quarters (Q1 2024, Q2 2025, etc.)
-        if period_lower.startswith('q'):
-            parts = period_str.split()
-            quarter = int(parts[0][1])  # Extract quarter number
-            year = int(parts[1])
+        quarter_match = re.match(r'q(\d)\s+(\d{4})', period_lower)
+        if quarter_match:
+            quarter = int(quarter_match.group(1))
+            year = int(quarter_match.group(2))
 
             quarter_map = {
                 1: ('01-01', '03-31'),
@@ -953,26 +1017,19 @@ class WhatIfAnalysisEngine:
             start_month_day, end_month_day = quarter_map[quarter]
             return f"{year}-{start_month_day}", f"{year}-{end_month_day}"
 
-        # Handle single months (January 2025, Jan 2025, 2025-01, etc.)
+        # Handle year-only periods (2024, 2025) - full year Jan 1 to Dec 31
+        year_match = re.match(r'^(\d{4})$', period_lower)
+        if year_match:
+            year = int(year_match.group(1))
+            return f"{year}-01-01", f"{year}-12-31"
+
+        # Handle single months (January 2025, Jan 2025, Mar 2026, etc.)
         try:
             parsed_date = parse(period_str, fuzzy=True)
             year = parsed_date.year
             month = parsed_date.month
 
-            # Get last day of month
-            if month == 12:
-                last_day = 31
-            elif month in [4, 6, 9, 11]:
-                last_day = 30
-            elif month == 2:
-                # Check for leap year
-                if (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0):
-                    last_day = 29
-                else:
-                    last_day = 28
-            else:
-                last_day = 31
-
+            _, last_day = monthrange(year, month)
             return f"{year}-{month:02d}-01", f"{year}-{month:02d}-{last_day}"
         except:
             # If can't parse, return as-is
