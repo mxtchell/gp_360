@@ -290,7 +290,7 @@ def _format_metric_name(metric: str) -> str:
     capabilities="Financial what-if scenario analysis: Model impact of cost changes on metrics like COGS (material, labor, overheads, logistics, commodities) or Marketing Spend (digital, traditional, trade, brand). Supports future projection scenarios - forecast how metric changes would impact financials. Shows forecasted vs estimated values with detailed breakdown.",
     limitations="Requires a breakout dimension for analysis. Requires at least one component change in price_change_scenario.",
     example_questions="What would be the impact of a 5% increase in cocoa price on COGS? How would a 10% increase in digital marketing spend affect total marketing by region? What if we increase trade marketing by 15% next quarter? Model a scenario where labor costs rise 8% - what's the COGS impact by category?",
-    parameter_guidance="Specify the metric to analyze (cogs, marketing_spend, etc.). Provide cost component changes in price_change_scenario as JSON like {'cocoa': 0.05} for 5% increase, or {'digital': 0.10, 'trade': 0.15} for multiple changes. Values are decimal percentages (0.05 = 5%). Use for future projections by specifying expected cost increases. For 'next quarter' use Q1 2026.",
+    parameter_guidance="Specify the metric to analyze (cogs, marketing_spend, etc.). Provide cost component changes in price_change_scenario as JSON like {'cocoa': 0.05} for 5% increase, or {'digital': 0.10, 'trade': 0.15} for multiple changes. Values are decimal percentages (0.05 = 5%). IMPORTANT: Data is only available through Q1 2026 (March 2026). For 'next quarter', 'upcoming quarter', or any future projection, ALWAYS use 'Q1 2026' as the base period since that is the most recent data available.",
     parameters=[
         SkillParameter(
             name="metric",
@@ -303,7 +303,7 @@ def _format_metric_name(metric: str) -> str:
             name="periods",
             constrained_to="date_filter",
             is_multi=True,
-            description="Time period for analysis or future projection. Use 'Q1 2026' for 'next quarter'. Examples: 'Q3 2024', 'Q1 2026'."
+            description="Time period for analysis. IMPORTANT: Latest available data is Q1 2026. For 'next quarter' or future projections, ALWAYS use 'Q1 2026' as the base period."
         ),
         SkillParameter(
             name="breakout",
