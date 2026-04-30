@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Default prompts
 DEFAULT_INSIGHT_PROMPT = """
-Analyze the following COGS what-if scenario results:
+Analyze the following what-if scenario results for {{ facts[0].metric }}:
 
 Scenario: {{ facts[0].scenario }}
 Breakout by: {{ facts[0].breakout }}
@@ -30,9 +30,9 @@ Breakout by: {{ facts[0].breakout }}
 {% endfor %}
 
 Provide a brief analysis covering:
-1. Overall COGS impact magnitude and direction across categories
-2. Which categories are most/least affected and why
-3. Which cost components drive the largest changes
+1. Overall {{ facts[0].metric }} impact magnitude and direction
+2. Which segments are most/least affected and why
+3. Key drivers of the changes
 4. Business implications and recommended actions
 
 Use a professional finance tone. Be concise (3-4 sentences).
@@ -245,8 +245,9 @@ WHATIF_LAYOUT = """{
     ]
 }"""
 
-# Hardcoded constants for COGS breakdown columns
+# Component name mappings for different metrics
 PRICE_COL_MAPPING = {
+    # COGS components
     "material": "Material",
     "labor": "Labor",
     "overheads": "Overheads",
@@ -254,35 +255,47 @@ PRICE_COL_MAPPING = {
     "sugar": "% of Sugar",
     "cocoa": "% of Cocoa",
     "wheat": "% of Wheat",
-    "other_materials": "% Others"
+    "other_materials": "% Others",
+    # Marketing components
+    "digital": "Digital",
+    "traditional": "Traditional",
+    "trade": "Trade",
+    "brand": "Brand"
 }
 
 
 @skill(
     name="FP&A What-If Analysis",
-    llm_name="COGS What-If Scenario Analysis",
-    description="Analyze the impact of commodity cost changes on COGS (Cost of Goods Sold). Shows how changes in material costs (cocoa, sugar, wheat, other materials) or operational costs (labor, overheads, logistics) affect total COGS by category.",
-    capabilities="COGS scenario analysis: Analyze impact of commodity price changes (cocoa, sugar, wheat, other materials) or operational cost changes (labor, overheads, logistics) on cost of goods sold by category. Shows forecasted vs estimated values with detailed breakdown by material and cost components.",
-    limitations="Requires category as breakout dimension. Supports only COGS metric. Requires at least one cost component change in price_change_scenario.",
-    example_questions="What would be the impact of a 5% increase in cocoa price on COGS? How would a 10% increase in labor costs affect COGS by category? What if sugar and wheat prices both increase by 3%?",
-    parameter_guidance="IMPORTANT: Always use 'category' as breakout dimension for COGS analysis. Provide commodity or operational cost changes in price_change_scenario as JSON like {'cocoa': 0.05} for 5% increase in cocoa, or {'labor': 0.10, 'sugar': 0.03} for multiple changes. Values should be decimal percentages (0.05 = 5%).",
+    llm_name="What-If Scenario Analysis",
+    description="Analyze the impact of cost or spend changes on key financial metrics like COGS, Marketing Spend, or other configurable metrics. Model future projection scenarios by applying percentage changes to cost components and see forecasted vs estimated impacts by dimension.",
+    capabilities="Financial what-if scenario analysis: Model impact of cost changes on metrics like COGS (material, labor, overheads, logistics, commodities) or Marketing Spend (digital, traditional, trade, brand). Supports future projection scenarios - forecast how metric changes would impact financials. Shows forecasted vs estimated values with detailed breakdown.",
+    limitations="Requires a breakout dimension for analysis. Requires at least one component change in price_change_scenario.",
+    example_questions="What would be the impact of a 5% increase in cocoa price on COGS? How would a 10% increase in digital marketing spend affect total marketing by region? What if we increase trade marketing by 15% next quarter? Model a scenario where labor costs rise 8% - what's the COGS impact?",
+    parameter_guidance="Specify the metric to analyze (cogs, marketing_spend, etc.). Provide cost component changes in price_change_scenario as JSON like {'cocoa': 0.05} for 5% increase, or {'digital': 0.10, 'trade': 0.15} for multiple changes. Values are decimal percentages (0.05 = 5%). Use for future projections by specifying expected cost increases.",
     parameters=[
+        SkillParameter(
+            name="metric",
+            is_multi=False,
+            constrained_to="metrics",
+            description="The metric to analyze (e.g., 'cogs', 'marketing_spend'). Determines which cost components are available.",
+            default_value="cogs"
+        ),
         SkillParameter(
             name="periods",
             constrained_to="date_filter",
             is_multi=True,
-            description="Time period for analysis (e.g., 'Q3 2024', 'Jul 2024 to Sep 2024')"
+            description="Time period for analysis or future projection (e.g., 'Q3 2024', 'Q1 2025' for forecasting)"
         ),
         SkillParameter(
             name="breakout",
             is_multi=False,
             constrained_to="dimensions",
-            description="Breakout dimension - must be 'category' for COGS analysis",
+            description="Breakout dimension for analysis (e.g., 'category', 'region', 'brand')",
             default_value="category"
         ),
         SkillParameter(
             name="price_change_scenario",
-            description="JSON object with cost changes as decimal percentages. Keys: 'cocoa', 'sugar', 'wheat', 'other_materials' for commodities; 'material', 'labor', 'overheads', 'logistics' for cost components. Example: {'cocoa': 0.05, 'sugar': 0.03} for 5% cocoa and 3% sugar increase."
+            description="JSON object with component changes as decimal percentages. For COGS: 'cocoa', 'sugar', 'wheat', 'other_materials', 'material', 'labor', 'overheads', 'logistics'. For Marketing: 'digital', 'traditional', 'trade', 'brand'. Example: {'cocoa': 0.05} or {'digital': 0.15, 'trade': 0.10}."
         ),
         SkillParameter(
             name="other_filters",
@@ -320,15 +333,12 @@ def whatif_analysis(parameters: SkillInput):
     print(f"Skill received following parameters: {parameters.arguments}")
 
     # Parse parameters
+    metric = parameters.arguments.metric if hasattr(parameters.arguments, 'metric') and parameters.arguments.metric else 'cogs'
     periods = parameters.arguments.periods if hasattr(parameters.arguments, 'periods') else []
     breakout = parameters.arguments.breakout if hasattr(parameters.arguments, 'breakout') else 'category'
     other_filters = parameters.arguments.other_filters if hasattr(parameters.arguments, 'other_filters') else []
     whatif_layout = parameters.arguments.whatif_layout if hasattr(parameters.arguments, 'whatif_layout') else WHATIF_LAYOUT
     table_name = parameters.arguments.table_name if hasattr(parameters.arguments, 'table_name') and parameters.arguments.table_name else None
-
-    # Force category as breakout for COGS
-    if breakout.lower() != 'category':
-        breakout = 'category'
 
     # Parse price change scenario
     price_scenario = {}
@@ -372,6 +382,7 @@ def whatif_analysis(parameters: SkillInput):
     # Create analysis engine
     analyzer = WhatIfAnalysisEngine(
         client=client,
+        metric=metric,
         periods=periods,
         breakout=breakout,
         filters=other_filters,
@@ -398,8 +409,12 @@ def whatif_analysis(parameters: SkillInput):
     # Generate insights using LLM
     ar_utils = ArUtils()
 
+    # Format metric name for display
+    metric_display = metric.upper().replace('_', ' ')
+
     # Build facts for prompt template
     facts = [{
+        'metric': metric_display,
         'scenario': ', '.join([f'{k}: {v:+.1%}' for k, v in price_scenario.items()]),
         'breakout': breakout,
         'results': results_df.to_dict(orient='records')
@@ -413,7 +428,7 @@ def whatif_analysis(parameters: SkillInput):
 
     # Prepare layout variables
     layout_vars = {
-        "chart_title": "COGS: Forecasted vs Estimated",
+        "chart_title": f"{metric_display}: Forecasted vs Estimated",
         "chart_categories": chart_data['categories'],
         "chart_data_series": chart_data['series'],
         "data": table_data['data'],
@@ -447,20 +462,21 @@ def whatif_analysis(parameters: SkillInput):
     return SkillOutput(
         final_prompt=max_response_prompt,
         narrative=insights,
-        visualizations=[SkillVisualization(title="COGS What-If Analysis", layout=rendered)],
+        visualizations=[SkillVisualization(title=f"{metric_display} What-If Analysis", layout=rendered)],
         parameter_display_descriptions=param_info,
         followup_questions=[],
         export_data=[
-            ExportData(name="COGS What-If Analysis", data=results_df)
+            ExportData(name=f"{metric_display} What-If Analysis", data=results_df)
         ]
     )
 
 
 class WhatIfAnalysisEngine:
-    """Engine for running COGS what-if scenario analysis"""
+    """Engine for running what-if scenario analysis on financial metrics"""
 
-    def __init__(self, client, periods, breakout, filters, price_scenario, table_name=None):
+    def __init__(self, client, metric, periods, breakout, filters, price_scenario, table_name=None):
         self.client = client
+        self.metric = metric.lower()
         self.periods = periods
         self.breakout = breakout
         self.filters = filters
@@ -485,24 +501,24 @@ class WhatIfAnalysisEngine:
                 self.table_name = getattr(dataset, 'name', None) or 'data'
 
     def run(self):
-        """Run the COGS what-if analysis and return results DataFrame"""
+        """Run the what-if analysis and return results DataFrame"""
 
-        # Pull base COGS data from database
-        base_df = self._pull_cogs_data()
+        # Pull base metric data from database
+        base_df = self._pull_metric_data()
 
-        # Calculate COGS breakdown by category
-        forecasted_df = self._calculate_category_breakouts_from_cogs(base_df)
+        # Calculate metric breakdown by dimension
+        forecasted_df = self._calculate_breakouts(base_df)
 
-        # Recalculate COGS with price changes
-        estimated_df = self._recalculate_cogs(forecasted_df, self.price_scenario)
+        # Recalculate metric with price changes
+        estimated_df = self._recalculate_metric(forecasted_df, self.price_scenario)
 
         # Merge and calculate changes
         results_df = self._merge_and_calculate_changes(forecasted_df, estimated_df)
 
         return results_df
 
-    def _pull_cogs_data(self):
-        """Pull COGS data from database using SQL query"""
+    def _pull_metric_data(self):
+        """Pull metric data from database using SQL query"""
 
         # Build filter clause
         filter_clauses = []
@@ -533,16 +549,16 @@ class WhatIfAnalysisEngine:
         else:
             raise ValueError("Period is required but was not provided")
 
-        # Query COGS by category
+        # Query metric by breakout dimension
         query = f"""
-        SELECT {self.breakout}, SUM(cogs) as cogs
+        SELECT {self.breakout}, SUM({self.metric}) as {self.metric}
         FROM {self.table_name}
         WHERE start_date BETWEEN '{start_date}' AND '{end_date}'
         {filter_clause}
         GROUP BY {self.breakout}
         """
 
-        logger.info(f"COGS query: {query}")
+        logger.info(f"{self.metric.upper()} query: {query}")
         result = self.client.data.execute_sql_query(
             database_id=self.database_id,
             sql_query=query,
@@ -551,7 +567,7 @@ class WhatIfAnalysisEngine:
 
         df = result.df if hasattr(result, 'df') else None
         if df is None or df.empty:
-            raise ValueError(f"No COGS data found for period {self.periods[0]}")
+            raise ValueError(f"No {self.metric.upper()} data found for period {self.periods[0]}")
 
         return df
 
@@ -604,80 +620,98 @@ class WhatIfAnalysisEngine:
             # If can't parse, return as-is
             return period_str, period_str
 
-    def _get_cogs_breakdown(self):
-        """Get COGS breakdown percentages by category"""
-        return {
-            "Material": {"Biscuits": 0.65, "Chocolate": 0.62, "Snack Bars": 0.70, "Cakes and Pastries": 0.55},
-            "Labor": {"Biscuits": 0.20, "Chocolate": 0.22, "Snack Bars": 0.18, "Cakes and Pastries": 0.25},
-            "Overheads": {"Biscuits": 0.08, "Chocolate": 0.06, "Snack Bars": 0.05, "Cakes and Pastries": 0.09},
-            "Logistics": {"Biscuits": 0.07, "Chocolate": 0.10, "Snack Bars": 0.07, "Cakes and Pastries": 0.11}
-        }
+    def _get_metric_config(self):
+        """Get breakdown configuration based on metric type"""
+        if self.metric == 'cogs':
+            return {
+                'components': {
+                    "Material": 0.60,
+                    "Labor": 0.22,
+                    "Overheads": 0.08,
+                    "Logistics": 0.10
+                },
+                'sub_components': {
+                    "% of Sugar": 0.20,
+                    "% of Cocoa": 0.25,
+                    "% of Wheat": 0.20,
+                    "% Others": 0.35
+                },
+                'sub_component_parent': 'Material'
+            }
+        elif self.metric in ('marketing_spend', 'marketing'):
+            return {
+                'components': {
+                    "Digital": 0.35,
+                    "Traditional": 0.25,
+                    "Trade": 0.25,
+                    "Brand": 0.15
+                },
+                'sub_components': {},
+                'sub_component_parent': None
+            }
+        else:
+            # Generic fallback - apply changes directly to metric
+            return {
+                'components': {},
+                'sub_components': {},
+                'sub_component_parent': None
+            }
 
-    def _get_cogs_commodity_breakdown(self):
-        """Get commodity breakdown percentages within materials by category"""
-        return {
-            "% of Sugar": {"Biscuits": 0.15, "Chocolate": 0.25, "Snack Bars": 0.10, "Cakes and Pastries": 0.30},
-            "% of Cocoa": {"Biscuits": 0.20, "Chocolate": 0.40, "Snack Bars": 0.25, "Cakes and Pastries": 0.15},
-            "% of Wheat": {"Biscuits": 0.30, "Chocolate": 0.00, "Snack Bars": 0.05, "Cakes and Pastries": 0.10},
-            "% Others": {"Biscuits": 0.35, "Chocolate": 0.35, "Snack Bars": 0.60, "Cakes and Pastries": 0.45}
-        }
-
-    def _calculate_category_breakouts_from_cogs(self, df):
-        """Calculate COGS breakdown by cost components for each category"""
-
+    def _calculate_breakouts(self, df):
+        """Calculate metric breakdown by cost components"""
         breakout_df = df.copy()
+        config = self._get_metric_config()
 
-        # Get breakdown percentages
-        cogs_breakdown = self._get_cogs_breakdown()
-        commodity_breakdown = self._get_cogs_commodity_breakdown()
+        # Calculate each cost component as percentage of metric
+        for component, pct in config['components'].items():
+            breakout_df[component] = breakout_df[self.metric] * pct
 
-        # Calculate each cost component
-        for component, category_pcts in cogs_breakdown.items():
-            breakout_df[component] = breakout_df.apply(
-                lambda row: row['cogs'] * category_pcts.get(row[self.breakout], 0),
-                axis=1
-            )
-
-        # Calculate commodity breakdown within materials
-        for commodity, category_pcts in commodity_breakdown.items():
-            breakout_df[commodity] = breakout_df.apply(
-                lambda row: row['Material'] * category_pcts.get(row[self.breakout], 0),
-                axis=1
-            )
+        # Calculate sub-components if applicable
+        if config['sub_component_parent'] and config['sub_components']:
+            parent_col = config['sub_component_parent']
+            for sub_comp, pct in config['sub_components'].items():
+                breakout_df[sub_comp] = breakout_df[parent_col] * pct
 
         return breakout_df
 
-    def _recalculate_cogs(self, df, price_changes):
-        """Recalculate COGS with price changes applied"""
-
+    def _recalculate_metric(self, df, price_changes):
+        """Recalculate metric with price changes applied"""
         estimated_df = df.copy()
+        config = self._get_metric_config()
 
-        # Get commodity columns
-        commodity_cols = ["% of Sugar", "% of Cocoa", "% of Wheat", "% Others"]
-        cogs_component_cols = ["Material", "Labor", "Overheads", "Logistics"]
+        component_cols = list(config['components'].keys())
+        sub_component_cols = list(config['sub_components'].keys())
 
-        # Apply commodity price changes first
-        for commodity in commodity_cols:
-            if commodity in price_changes:
-                estimated_df[commodity] = estimated_df[commodity] * (1 + price_changes[commodity])
+        # Apply sub-component price changes first
+        for sub_comp in sub_component_cols:
+            if sub_comp in price_changes:
+                estimated_df[sub_comp] = estimated_df[sub_comp] * (1 + price_changes[sub_comp])
 
-        # Recalculate Material as sum of commodities
-        estimated_df["Material"] = estimated_df[commodity_cols].sum(axis=1)
+        # Recalculate parent component as sum of sub-components if applicable
+        if config['sub_component_parent'] and sub_component_cols:
+            estimated_df[config['sub_component_parent']] = estimated_df[sub_component_cols].sum(axis=1)
 
-        # Apply cost component price changes
-        for component in cogs_component_cols:
-            if component in price_changes and component != "Material":
+        # Apply component price changes
+        for component in component_cols:
+            if component in price_changes and component != config['sub_component_parent']:
                 estimated_df[component] = estimated_df[component] * (1 + price_changes[component])
 
-        # Recalculate total COGS
-        estimated_df["cogs"] = estimated_df[cogs_component_cols].sum(axis=1)
+        # Recalculate total metric
+        if component_cols:
+            estimated_df[self.metric] = estimated_df[component_cols].sum(axis=1)
+        else:
+            # Direct percentage change on metric if no components
+            for key, pct in price_changes.items():
+                estimated_df[self.metric] = estimated_df[self.metric] * (1 + pct)
+                break  # Only apply first change for simple metrics
 
         return estimated_df
 
     def _merge_and_calculate_changes(self, forecasted_df, estimated_df):
         """Merge forecasted and estimated, calculate changes"""
+        config = self._get_metric_config()
+        metric_upper = self.metric.upper()
 
-        # Create multi-index columns structure
         result_data = []
 
         for idx, row in forecasted_df.iterrows():
@@ -686,22 +720,25 @@ class WhatIfAnalysisEngine:
 
             row_data = {self.breakout: category}
 
-            # Add COGS columns
-            row_data["COGS_Forecasted"] = row["cogs"]
-            row_data["COGS_Estimated"] = est_row["cogs"]
-            row_data["COGS_Change"] = (est_row["cogs"] - row["cogs"]) / row["cogs"] if row["cogs"] != 0 else 0
+            # Add metric columns
+            row_data[f"{metric_upper}_Forecasted"] = row[self.metric]
+            row_data[f"{metric_upper}_Estimated"] = est_row[self.metric]
+            row_data[f"{metric_upper}_Change"] = (est_row[self.metric] - row[self.metric]) / row[self.metric] if row[self.metric] != 0 else 0
 
-            # Add Material columns
-            row_data["Material_Forecasted"] = row["Material"]
-            row_data["Material_Estimated"] = est_row["Material"]
-            row_data["Material_Change"] = (est_row["Material"] - row["Material"]) / row["Material"] if row["Material"] != 0 else 0
+            # Add component columns
+            for component in config['components'].keys():
+                if component in row:
+                    row_data[f"{component}_Forecasted"] = row[component]
+                    row_data[f"{component}_Estimated"] = est_row[component]
+                    row_data[f"{component}_Change"] = (est_row[component] - row[component]) / row[component] if row[component] != 0 else 0
 
-            # Add commodity columns
-            for commodity in ["% of Sugar", "% of Cocoa", "% of Wheat", "% Others"]:
-                col_name = commodity.replace("% of ", "").replace(" ", "_")
-                row_data[f"{col_name}_Forecasted"] = row[commodity]
-                row_data[f"{col_name}_Estimated"] = est_row[commodity]
-                row_data[f"{col_name}_Change"] = (est_row[commodity] - row[commodity]) / row[commodity] if row[commodity] != 0 else 0
+            # Add sub-component columns
+            for sub_comp in config['sub_components'].keys():
+                if sub_comp in row:
+                    col_name = sub_comp.replace("% of ", "").replace(" ", "_")
+                    row_data[f"{col_name}_Forecasted"] = row[sub_comp]
+                    row_data[f"{col_name}_Estimated"] = est_row[sub_comp]
+                    row_data[f"{col_name}_Change"] = (est_row[sub_comp] - row[sub_comp]) / row[sub_comp] if row[sub_comp] != 0 else 0
 
             result_data.append(row_data)
 
@@ -709,49 +746,62 @@ class WhatIfAnalysisEngine:
 
     def create_chart_data(self, df):
         """Create Highcharts column chart data from results DataFrame"""
+        metric_upper = self.metric.upper()
 
         categories = df[self.breakout].tolist()
-        forecasted_data = df["COGS_Forecasted"].tolist()
-        estimated_data = df["COGS_Estimated"].tolist()
+        forecasted_data = df[f"{metric_upper}_Forecasted"].tolist()
+        estimated_data = df[f"{metric_upper}_Estimated"].tolist()
 
         return {
             "categories": categories,
             "series": [
-                {"name": "COGS Forecasted", "data": forecasted_data, "color": "#5DADE2"},
-                {"name": "COGS Estimated", "data": estimated_data, "color": "#8E44AD"}
+                {"name": f"{metric_upper} Forecasted", "data": forecasted_data, "color": "#5DADE2"},
+                {"name": f"{metric_upper} Estimated", "data": estimated_data, "color": "#8E44AD"}
             ]
         }
 
     def create_table_data(self, df):
         """Create DataTable data from results DataFrame"""
+        config = self._get_metric_config()
+        metric_upper = self.metric.upper()
 
-        columns = [
-            {"name": self.breakout.title()},
-            {"name": "COGS Forecasted"},
-            {"name": "COGS Estimated"},
-            {"name": "Change"},
-            {"name": "Material Forecasted"},
-            {"name": "Material Estimated"},
-            {"name": "Material Change"},
-            {"name": "Cocoa Forecasted"},
-            {"name": "Cocoa Estimated"},
-            {"name": "Cocoa Change"}
-        ]
+        # Build dynamic columns
+        columns = [{"name": self.breakout.title()}]
+        columns.extend([
+            {"name": f"{metric_upper} Forecasted"},
+            {"name": f"{metric_upper} Estimated"},
+            {"name": "Change"}
+        ])
+
+        # Add first component columns if available
+        component_keys = list(config['components'].keys())
+        if component_keys:
+            first_comp = component_keys[0]
+            columns.extend([
+                {"name": f"{first_comp} Forecasted"},
+                {"name": f"{first_comp} Estimated"},
+                {"name": f"{first_comp} Change"}
+            ])
 
         data = []
         for _, row in df.iterrows():
-            data.append([
+            row_data = [
                 row[self.breakout],
-                f"${row['COGS_Forecasted']/1000000:.2f}M",
-                f"${row['COGS_Estimated']/1000000:.2f}M",
-                f"{row['COGS_Change']:.2%}",
-                f"${row['Material_Forecasted']/1000000:.2f}M",
-                f"${row['Material_Estimated']/1000000:.2f}M",
-                f"{row['Material_Change']:.2%}",
-                f"${row['Cocoa_Forecasted']/1000000:.2f}M",
-                f"${row['Cocoa_Estimated']/1000000:.2f}M",
-                f"{row['Cocoa_Change']:.2%}"
-            ])
+                f"${row[f'{metric_upper}_Forecasted']/1000000:.2f}M",
+                f"${row[f'{metric_upper}_Estimated']/1000000:.2f}M",
+                f"{row[f'{metric_upper}_Change']:.2%}"
+            ]
+
+            # Add first component data if available
+            if component_keys:
+                first_comp = component_keys[0]
+                row_data.extend([
+                    f"${row[f'{first_comp}_Forecasted']/1000000:.2f}M",
+                    f"${row[f'{first_comp}_Estimated']/1000000:.2f}M",
+                    f"{row[f'{first_comp}_Change']:.2%}"
+                ])
+
+            data.append(row_data)
 
         return {"columns": columns, "data": data}
 
