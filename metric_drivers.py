@@ -549,6 +549,37 @@ def format_number(value, is_currency=True, decimals=1):
     return formatted
 
 
+def _parse_formatted_number(formatted_str):
+    """Parse formatted number strings like '$192.5M', '$1.9B', '$-197.2K' back to raw numbers"""
+    if not formatted_str or not isinstance(formatted_str, str):
+        return 0
+
+    # Remove currency symbol and whitespace
+    s = formatted_str.strip().replace('$', '').replace(',', '')
+
+    # Handle negative values
+    negative = '-' in s
+    s = s.replace('-', '')
+
+    # Extract multiplier
+    multiplier = 1
+    if s.endswith('B'):
+        multiplier = 1_000_000_000
+        s = s[:-1]
+    elif s.endswith('M'):
+        multiplier = 1_000_000
+        s = s[:-1]
+    elif s.endswith('K'):
+        multiplier = 1_000
+        s = s[:-1]
+
+    try:
+        value = float(s) * multiplier
+        return -value if negative else value
+    except ValueError:
+        return 0
+
+
 def format_display_name(name):
     """
     Format technical names to display names
@@ -1490,8 +1521,8 @@ def metric_drivers(parameters: SkillInput):
     summary_table = analysis.get_summary_table()
 
     if is_expense_metric:
-        # For expense metrics: show summary table only (no PVM waterfall - doesn't make sense for expenses)
-        logger.info("Skipping PVM waterfall chart for expense metric")
+        # For expense metrics: show horizontal bar chart comparing Actuals vs Budget/Forecast/Prior Period
+        logger.info("Creating expense comparison bar chart (no PVM waterfall)")
         if summary_table:
             metric_display = format_display_name(metric)
             general_vars = {
@@ -1500,8 +1531,48 @@ def metric_drivers(parameters: SkillInput):
                 "exec_summary": insights
             }
 
-            # Use horizontal bar layout with just the table (no chart)
-            layout_vars = {**general_vars, **summary_table, 'chart_categories': [], 'chart_data': [], 'chart_y_axis': {}, 'chart_title': ''}
+            # Build bar chart data from summary table - show Actuals vs Comparison
+            expense_categories = []
+            actuals_data = []
+            comparison_data = []
+
+            for row in summary_table['data']:
+                # row format: [name, current_period, comparison, change_$, change_%]
+                name = row[0].strip() if row[0] else ''
+                if name:  # Skip empty rows
+                    expense_categories.append(name)
+                    # Parse currency values (remove $, M, K, B and convert)
+                    try:
+                        actual_val = _parse_formatted_number(row[1])
+                        comp_val = _parse_formatted_number(row[2])
+                        actuals_data.append(round(actual_val / 1_000_000, 1))  # Convert to millions
+                        comparison_data.append(round(comp_val / 1_000_000, 1))
+                    except:
+                        actuals_data.append(0)
+                        comparison_data.append(0)
+
+            expense_chart_data = {
+                'chart_categories': expense_categories,
+                'chart_data': [
+                    {
+                        'name': 'Actuals',
+                        'data': actuals_data,
+                        'color': '#5DADE2'
+                    },
+                    {
+                        'name': comparison_type,
+                        'data': comparison_data,
+                        'color': '#F8C471'
+                    }
+                ],
+                'chart_y_axis': {
+                    'title': {'text': 'Amount ($M)'},
+                    'labels': {'format': '${value:,.0f}M'}
+                },
+                'chart_title': f'Expense Comparison: Actuals vs {comparison_type}'
+            }
+
+            layout_vars = {**general_vars, **summary_table, **expense_chart_data}
             rendered = wire_layout(json.loads(HORIZONTAL_BAR_LAYOUT), layout_vars)
             viz_list.append(SkillVisualization(title=f"{metric_display} Analysis", layout=rendered))
             export_data["Expense_Summary"] = pd.DataFrame(summary_table['data'], columns=['', 'Current Period', comparison_type, 'Change ($)', 'Change (%)'])
