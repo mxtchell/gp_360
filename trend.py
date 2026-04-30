@@ -256,8 +256,14 @@ def trend(parameters: SkillInput):
         if hasattr(parameters.arguments, key) and getattr(parameters.arguments, key) is not None:
             param_dict[key] = getattr(parameters.arguments, key)
 
-    # If compare_metrics specified, auto-add 'scenario' to breakouts
-    if param_dict["compare_metrics"]:
+    # Filter out invalid compare_metrics values (null, None, empty strings)
+    valid_compare_metrics = [
+        v for v in (param_dict["compare_metrics"] or [])
+        if v and str(v).lower() not in ('null', 'none', '')
+    ]
+
+    # If compare_metrics specified with valid values, auto-add 'scenario' to breakouts
+    if valid_compare_metrics:
         if param_dict["breakouts"] is None:
             param_dict["breakouts"] = ["scenario"]
         elif "scenario" not in param_dict["breakouts"]:
