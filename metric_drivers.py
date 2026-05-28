@@ -1172,7 +1172,8 @@ class FPAVarianceAnalysis:
                 if driver_metric != self.metric:  # Don't duplicate the main metric
                     driver_display = f"  {format_display_name(driver_metric)}"
                     # Determine if currency based on metric name
-                    is_currency = not any(x in driver_metric.lower() for x in ['units', 'volume', 'count', 'rate', 'ratio', 'pct', 'percent'])
+                    # Use word boundaries to avoid false positives (e.g., 'count' matching 'accounting')
+                    is_currency = not any(f'_{x}' in driver_metric.lower() or driver_metric.lower().startswith(x) or driver_metric.lower().endswith(f'_{x}') for x in ['units', 'volume', 'count', 'rate', 'ratio', 'pct', 'percent'])
                     metrics_to_show.append((driver_display, driver_metric, is_currency))
 
             logger.info(f"Using metric group drivers: {[m[1] for m in metrics_to_show]}")
