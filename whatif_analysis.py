@@ -33,9 +33,8 @@ Provide a brief analysis covering:
 1. Overall {{ facts[0].metric }} impact magnitude and direction
 2. Which segments are most/least affected and why
 3. Key drivers of the changes
-4. Business implications and recommended actions
 
-Use a professional finance tone. Be concise (3-4 sentences).
+Use a professional finance tone. Use bullet points only, do NOT use tables. Keep response to 100-150 words.
 """
 
 DEFAULT_MAX_PROMPT = DEFAULT_INSIGHT_PROMPT

@@ -44,9 +44,8 @@ Provide detailed insights covering:
 1. Top performers and underperformers
 2. Key variance drivers vs forecast/budget
 3. Period-over-period trends
-4. Actionable recommendations
 
-Format the insights in clear markdown with bullet points.
+Format the insights using bullet points only. Do NOT use tables or markdown tables. Keep response to 100-150 words.
 """
 
 # Layout template for table with chart

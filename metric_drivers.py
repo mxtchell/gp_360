@@ -80,7 +80,7 @@ Provide detailed insights covering:
 2. Top contributing dimensions
 3. Notable patterns or areas worth monitoring
 
-Format the insights using bullet points only. Do NOT use tables or markdown tables.
+Format the insights using bullet points only. Do NOT use tables or markdown tables. Keep response to 150-200 words.
 """
 
 
