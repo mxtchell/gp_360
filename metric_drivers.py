@@ -76,7 +76,7 @@ Analyze the following variance analysis data:
 {% endfor %}
 
 Provide detailed insights covering:
-1. Key variance drivers (Price, Volume, Mix)
+1. Key variance drivers (only mention Price/Volume/Mix if the data includes PVM decomposition - this applies to revenue metrics, not expenses)
 2. Top contributing dimensions
 3. Notable patterns or areas worth monitoring
 
