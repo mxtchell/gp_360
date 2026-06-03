@@ -1005,13 +1005,15 @@ class WhatIfAnalysisEngine:
 
             if dim and val:
                 if isinstance(val, list):
-                    if len(val) == 1:
-                        filter_clauses.append(f"UPPER({dim}) {op} UPPER('{val[0]}')")
-                    else:
-                        val_str = ", ".join([f"UPPER('{v}')" for v in val])
-                        filter_clauses.append(f"UPPER({dim}) IN ({val_str})")
+                    # Always use IN (...) syntax for lists
+                    val_str = ", ".join([f"UPPER('{v}')" for v in val])
+                    filter_clauses.append(f"UPPER({dim}) IN ({val_str})")
                 elif isinstance(val, str):
-                    filter_clauses.append(f"UPPER({dim}) {op} UPPER('{val}')")
+                    # Use IN for 'in' operator, = for others
+                    if op.lower() == 'in':
+                        filter_clauses.append(f"UPPER({dim}) IN (UPPER('{val}'))")
+                    else:
+                        filter_clauses.append(f"UPPER({dim}) = UPPER('{val}')")
                 else:
                     filter_clauses.append(f"{dim} {op} {val}")
 
