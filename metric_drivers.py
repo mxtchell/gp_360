@@ -78,10 +78,9 @@ Analyze the following variance analysis data:
 Provide detailed insights covering:
 1. Key variance drivers (Price, Volume, Mix)
 2. Top contributing dimensions
-3. Actionable recommendations for stakeholders
-4. Areas requiring immediate attention
+3. Notable patterns or areas worth monitoring
 
-Format the insights in clear markdown with bullet points.
+Format the insights using bullet points only. Do NOT use tables or markdown tables.
 """
 
 
