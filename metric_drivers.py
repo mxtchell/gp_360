@@ -75,12 +75,14 @@ Analyze the following variance analysis data:
 {% endfor %}
 {% endfor %}
 
-Provide detailed insights covering:
-1. Key variance drivers (only mention Price/Volume/Mix if the data includes PVM decomposition - this applies to revenue metrics, not expenses)
-2. Top contributing dimensions
-3. Notable patterns or areas worth monitoring
+Provide detailed insights based ONLY on the facts provided above. Do NOT invent or assume data not present in the facts.
 
-Format the insights using bullet points only. Do NOT use tables or markdown tables. Keep response to 150-200 words.
+Cover:
+1. Overall variance performance
+2. Top contributing dimensions (if mentioned in facts)
+3. Notable patterns worth monitoring
+
+Format using bullet points only. Do NOT use tables. Keep response to 150-200 words.
 """
 
 
@@ -1303,8 +1305,24 @@ class FPAVarianceAnalysis:
         # Query data
         self.query_data()
 
-        # Calculate PVM
-        self.calculate_price_volume_mix()
+        # Only calculate PVM for revenue metrics (not expenses)
+        # PVM decomposition only makes sense for revenue where you have price * volume
+        is_revenue_metric = 'revenue' in self.metric.lower()
+        if is_revenue_metric:
+            self.calculate_price_volume_mix()
+            logger.info("PVM calculated for revenue metric")
+        else:
+            logger.info(f"Skipping PVM for non-revenue metric: {self.metric}")
+            # Add a simple variance fact for non-revenue metrics
+            if self.actuals_df is not None and self.comparison_df is not None:
+                actual_val = self.actuals_df[self.metric].sum()
+                comparison_val = self.comparison_df[self.metric].sum()
+                variance = actual_val - comparison_val
+                variance_pct = (variance / comparison_val * 100) if comparison_val != 0 else 0
+                self.facts.append({
+                    'fact': f"Total variance: {format_number(variance)} ({variance_pct:.1f}%)",
+                    'category': 'overall'
+                })
 
         # Calculate dimensional breakouts
         for dim in self.breakout_dimensions:
