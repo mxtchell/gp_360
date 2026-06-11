@@ -71,7 +71,7 @@ WHATIF_LAYOUT = """{
                 "name": "Header_Title",
                 "type": "Header",
                 "children": "",
-                "text": "COGS What-If Analysis",
+                "text": "What-If Analysis",
                 "style": {
                     "fontSize": "24px",
                     "fontWeight": "bold",
@@ -86,7 +86,7 @@ WHATIF_LAYOUT = """{
                 "name": "Header_Subtitle",
                 "type": "Header",
                 "children": "",
-                "text": "Impact of Price Changes on COGS",
+                "text": "Scenario Impact Analysis",
                 "style": {
                     "fontSize": "16px",
                     "fontWeight": "normal",
@@ -108,20 +108,20 @@ WHATIF_LAYOUT = """{
                         "backgroundColor": "#f8fafc"
                     },
                     "title": {
-                        "text": "COGS Forecasted vs Estimated",
+                        "text": "Forecasted vs Estimated",
                         "style": {
                             "fontSize": "20px"
                         }
                     },
                     "xAxis": {
-                        "categories": ["Snack Bars", "Biscuits", "Cakes and Pastries", "Chocolate"],
+                        "categories": [],
                         "title": {
-                            "text": "Category"
+                            "text": "Brand"
                         }
                     },
                     "yAxis": {
                         "title": {
-                            "text": "COGS"
+                            "text": "Gross Revenue"
                         },
                         "labels": {
                             "format": "${value:,.0f}"
@@ -129,13 +129,13 @@ WHATIF_LAYOUT = """{
                     },
                     "series": [
                         {
-                            "name": "COGS Forecasted",
-                            "data": [1640740, 4441940, 1634330, 3289790],
+                            "name": "Gross Revenue Forecasted",
+                            "data": [],
                             "color": "#5DADE2"
                         },
                         {
-                            "name": "COGS Estimated",
-                            "data": [1655090, 4470820, 1641080, 3330580],
+                            "name": "Gross Revenue Estimated",
+                            "data": [],
                             "color": "#8E44AD"
                         }
                     ],
@@ -263,6 +263,28 @@ WHATIF_LAYOUT = """{
                     "fieldName": "text"
                 }
             ]
+        },
+        {
+            "name": "yaxis_title",
+            "isRequired": false,
+            "defaultValue": null,
+            "targets": [
+                {
+                    "elementName": "HighchartsChart0",
+                    "fieldName": "options.yAxis.title.text"
+                }
+            ]
+        },
+        {
+            "name": "xaxis_title",
+            "isRequired": false,
+            "defaultValue": null,
+            "targets": [
+                {
+                    "elementName": "HighchartsChart0",
+                    "fieldName": "options.xAxis.title.text"
+                }
+            ]
         }
     ]
 }"""
@@ -376,6 +398,11 @@ def _format_metric_name(metric: str) -> str:
             default_value=None
         ),
         SkillParameter(
+            name="manufacturer_filter",
+            description="Manufacturer to filter on. Defaults to 'Apex International'.",
+            default_value="Apex International"
+        ),
+        SkillParameter(
             name="other_filters",
             constrained_to="filters",
             is_multi=True,
@@ -419,14 +446,17 @@ def whatif_analysis(parameters: SkillInput):
     whatif_layout = parameters.arguments.whatif_layout if hasattr(parameters.arguments, 'whatif_layout') else WHATIF_LAYOUT
     table_name = parameters.arguments.table_name if hasattr(parameters.arguments, 'table_name') and parameters.arguments.table_name else None
 
-    # Get explicit brand/category filters (workaround for platform eq operator issue)
+    # Get explicit brand/category/manufacturer filters (workaround for platform eq operator issue)
     brand_filter = getattr(parameters.arguments, 'brand_filter', None)
     category_filter = getattr(parameters.arguments, 'category_filter', None)
+    manufacturer_filter = getattr(parameters.arguments, 'manufacturer_filter', 'Apex International') or 'Apex International'
 
     # Add explicit filters to other_filters list
+    other_filters = list(other_filters) if other_filters else []
     if category_filter:
-        other_filters = list(other_filters) if other_filters else []
         other_filters.append({'dim': 'category', 'val': [category_filter], 'op': '='})
+    if manufacturer_filter:
+        other_filters.append({'dim': 'manufacturer', 'val': [manufacturer_filter], 'op': '='})
     # Note: brand_filter is used differently - it's the TARGET brand for revenue impact, not a filter
 
     # Market share specific parameters
@@ -630,24 +660,39 @@ def whatif_analysis(parameters: SkillInput):
         max_response_prompt = jinja2.Template(parameters.arguments.max_prompt).render(facts=facts)
         insights = ar_utils.get_llm_response(insight_prompt_rendered)
 
+        # Build dynamic header title: "Brand, Category, Manufacturer, Marketing Spend: +25%"
+        header_parts = []
+        if brand_filter:
+            header_parts.append(brand_filter)
+        if category_filter:
+            header_parts.append(category_filter)
+        if manufacturer_filter:
+            header_parts.append(manufacturer_filter)
+        header_parts.append(f"Marketing Spend: {spend_change_pct:+.1%}")
+        header_title = ", ".join(header_parts)
+
         # Prepare layout variables
         layout_vars = {
-            "header_title": "Revenue Impact What-If Analysis",
-            "header_subtitle": f"{spend_type.title()} Spend: {spend_change_pct:+.0%} | Revenue Multiplier: {revenue_multiplier}x",
+            "header_title": header_title,
+            "header_subtitle": f"by {breakout.title()} • {periods[0] if periods else 'N/A'}",
             "chart_title": f"Gross Revenue: Forecasted vs Estimated",
             "chart_categories": chart_data['categories'],
             "chart_data_series": chart_data['series'],
             "data": table_data['data'],
-            "col_defs": table_data['columns']
+            "col_defs": table_data['columns'],
+            "yaxis_title": "Gross Revenue",
+            "xaxis_title": breakout.title()
         }
 
         rendered_layout = wire_layout(json.loads(whatif_layout), layout_vars)
 
+        # Build param info matching expected format
         param_info = [
-            ParameterDisplayDescription(key="Analysis Type", value="Revenue Impact"),
-            ParameterDisplayDescription(key=f"{spend_type.title()} Spend Change", value=f"{spend_change_pct:+.0%}"),
-            ParameterDisplayDescription(key="Revenue Multiplier", value=f"{revenue_multiplier}x"),
+            ParameterDisplayDescription(key="Metric", value="Gross Revenue"),
+            ParameterDisplayDescription(key="Filter", value=f"{brand_filter} (Brand), {category_filter} (Category) and {manufacturer_filter} (Manufacturer)" if brand_filter and category_filter else "None"),
+            ParameterDisplayDescription(key="Breakout", value=breakout.title()),
             ParameterDisplayDescription(key="Period", value=periods[0] if periods else "N/A"),
+            ParameterDisplayDescription(key="Marketing Spend", value=f"{spend_change_pct:+.1%}"),
             ParameterDisplayDescription(key="Breakout", value=breakout)
         ]
 
