@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import pandas as pd
 import numpy as np
 
@@ -240,6 +241,28 @@ WHATIF_LAYOUT = """{
                     "fieldName": "columns"
                 }
             ]
+        },
+        {
+            "name": "header_title",
+            "isRequired": false,
+            "defaultValue": null,
+            "targets": [
+                {
+                    "elementName": "Header_Title",
+                    "fieldName": "text"
+                }
+            ]
+        },
+        {
+            "name": "header_subtitle",
+            "isRequired": false,
+            "defaultValue": null,
+            "targets": [
+                {
+                    "elementName": "Header_Subtitle",
+                    "fieldName": "text"
+                }
+            ]
         }
     ]
 }"""
@@ -284,18 +307,18 @@ def _format_metric_name(metric: str) -> str:
 
 @skill(
     name="FP&A What-If Analysis",
-    llm_name="What-If Scenario Analysis - Price Impact on Market Share",
-    description="USE THIS SKILL for 'what will be the impact' questions about price changes and market share. Models how price increases affect market share using price elasticity. Also supports cost impact scenarios. Run ONCE - do NOT use Market Share Analysis for impact questions.",
-    capabilities="MARKET SHARE IMPACT FROM PRICE CHANGES: Model how price increases/decreases affect market share by category/region. Uses price elasticity to calculate share decline from price hikes. Also supports cost impact analysis for COGS/Marketing. ONE call shows all results - do NOT run multiple times.",
-    limitations="Run this skill ONCE per question. Do NOT run Market Share Analysis for 'impact' or 'what if' questions - use this skill instead.",
-    example_questions="What will be the impact on NA market share if we increase prices by 10%? How would a 10% price increase affect our market share by category? What happens to market share if we raise prices 15% in EMEA? Model price impact on share.",
-    parameter_guidance="FOR MARKET SHARE IMPACT QUESTIONS: Use analysis_type='market_share', set price_change_pct (0.10 = 10% increase). Run ONCE - shows all categories together. Do NOT run Market Share Analysis skill for impact questions. For cost analysis: use analysis_type='cost_impact'. IMPORTANT: Use 'Q1 2026' for latest data.",
+    llm_name="What-If Scenario Analysis - Revenue, Market Share, and Cost Impact",
+    description="USE THIS SKILL for 'what will be the impact' questions. Supports THREE analysis types: (1) revenue_impact - how marketing/spend changes affect revenue, (2) market_share - how price changes affect market share, (3) cost_impact - how cost changes affect expenses. Run ONCE per question.",
+    capabilities="REVENUE IMPACT: Model how marketing spend changes affect gross revenue (e.g., 25% marketing increase → revenue growth with competitor cannibalization). MARKET SHARE IMPACT: Model how price changes affect market share using elasticity. COST IMPACT: Model how cost component changes affect total costs.",
+    limitations="Run this skill ONCE per question. Choose the appropriate analysis_type based on the question.",
+    example_questions="What will be the impact on revenue if we increase marketing spend by 25%? What will be the impact on biscuits if we increase marketing spend on DolceVita by 25%? How would a 10% price increase affect market share? What happens to COGS if cocoa prices increase 5%?",
+    parameter_guidance="FOR REVENUE/SALES IMPACT FROM SPEND CHANGES: Use analysis_type='revenue_impact', set price_change_scenario (e.g., {'marketing': 0.25}). FOR MARKET SHARE IMPACT: Use analysis_type='market_share', set price_change_pct. FOR COST IMPACT: Use analysis_type='cost_impact'. IMPORTANT: Use 'Q1 2026' for latest data.",
     parameters=[
         SkillParameter(
             name="analysis_type",
             is_multi=False,
-            constrained_values=["cost_impact", "market_share"],
-            description="Type of analysis: 'cost_impact' for COGS/expense modeling, 'market_share' for price elasticity impact on market share.",
+            constrained_values=["cost_impact", "market_share", "revenue_impact"],
+            description="Type of analysis: 'cost_impact' for COGS/expense modeling, 'market_share' for price elasticity impact on market share, 'revenue_impact' for modeling how spend changes affect revenue.",
             default_value="cost_impact"
         ),
         SkillParameter(
@@ -327,6 +350,16 @@ def _format_metric_name(metric: str) -> str:
             name="price_elasticity",
             description="For market_share analysis: Price elasticity coefficient. Default -0.34 means 10% price increase = 3.4% market share decline. Negative value = inverse relationship.",
             default_value=-0.34
+        ),
+        SkillParameter(
+            name="revenue_multiplier",
+            description="For revenue_impact analysis: Revenue multiplier for spend changes. Default 3.0 means 10% marketing increase = 30% revenue increase for target brand. Competitors see inverse effect.",
+            default_value=3.0
+        ),
+        SkillParameter(
+            name="cannibalization_factor",
+            description="For revenue_impact analysis: Factor for competitor cannibalization. Default 0.5 means competitors lose 50% of what target gains.",
+            default_value=0.5
         ),
         SkillParameter(
             name="price_change_scenario",
@@ -380,9 +413,14 @@ def whatif_analysis(parameters: SkillInput):
     price_change_pct = getattr(parameters.arguments, 'price_change_pct', None)
     price_elasticity = getattr(parameters.arguments, 'price_elasticity', -0.34) or -0.34
 
-    # Get AnswerRocketClient
+    # Get AnswerRocketClient - pass url and token explicitly for local testing
     try:
-        client = AnswerRocketClient()
+        url = os.environ.get('AR_URL')
+        token = os.environ.get('AR_API_TOKEN')
+        if url and token:
+            client = AnswerRocketClient(url=url, token=token)
+        else:
+            client = AnswerRocketClient()
     except Exception as e:
         logger.error(f"Failed to initialize AnswerRocketClient: {e}")
         return SkillOutput(
@@ -457,6 +495,8 @@ def whatif_analysis(parameters: SkillInput):
 
         # Prepare layout variables
         layout_vars = {
+            "header_title": "Market Share What-If Analysis",
+            "header_subtitle": f"Price Change: {price_change_pct:+.0%} | Elasticity: {price_elasticity}",
             "chart_title": f"Market Share Impact: {price_change_pct:+.0%} Price Change",
             "chart_categories": chart_data['categories'],
             "chart_data_series": chart_data['series'],
@@ -480,6 +520,122 @@ def whatif_analysis(parameters: SkillInput):
             visualizations=[SkillVisualization(title="Market Share Impact", layout=rendered_layout)],
             parameter_display_descriptions=param_info,
             export_data=[ExportData(name="Market Share Impact", data=results_df)]
+        )
+
+    elif analysis_type == 'revenue_impact':
+        # Revenue impact analysis - models how spend changes affect revenue
+        # Parse spend change from price_change_scenario
+        spend_change_pct = None
+        spend_type = None
+
+        if hasattr(parameters.arguments, 'price_change_scenario') and parameters.arguments.price_change_scenario:
+            try:
+                if isinstance(parameters.arguments.price_change_scenario, dict):
+                    scenario = parameters.arguments.price_change_scenario
+                else:
+                    scenario = json.loads(parameters.arguments.price_change_scenario)
+                # Get the first spend change (e.g., {'marketing': 0.25})
+                if scenario:
+                    spend_type, spend_change_pct = list(scenario.items())[0]
+                    spend_change_pct = float(spend_change_pct)
+            except Exception as e:
+                logger.error(f"Error parsing spend scenario: {e}")
+                return SkillOutput(
+                    final_prompt="Error parsing price_change_scenario parameter.",
+                    narrative="Error: Invalid format. Use format like {'marketing': 0.25} for 25% increase.",
+                    visualizations=[],
+                    parameter_display_descriptions=[]
+                )
+
+        if spend_change_pct is None:
+            return SkillOutput(
+                final_prompt="Spend change is required for revenue impact analysis.",
+                narrative="Error: You must specify a spend change in price_change_scenario (e.g., {'marketing': 0.25} for 25% increase).",
+                visualizations=[],
+                parameter_display_descriptions=[]
+            )
+
+        # Get revenue multiplier and cannibalization factor
+        revenue_multiplier = getattr(parameters.arguments, 'revenue_multiplier', 3.0) or 3.0
+        cannibalization_factor = getattr(parameters.arguments, 'cannibalization_factor', 0.5) or 0.5
+
+        try:
+            revenue_multiplier = float(revenue_multiplier)
+            cannibalization_factor = float(cannibalization_factor)
+        except (ValueError, TypeError):
+            revenue_multiplier = 3.0
+            cannibalization_factor = 0.5
+
+        # Create revenue impact analyzer
+        analyzer = RevenueImpactEngine(
+            client=client,
+            periods=periods,
+            breakout=breakout,
+            filters=other_filters,
+            spend_change_pct=spend_change_pct,
+            spend_type=spend_type or 'marketing',
+            revenue_multiplier=revenue_multiplier,
+            cannibalization_factor=cannibalization_factor,
+            table_name=table_name
+        )
+
+        # Run revenue impact analysis
+        try:
+            results_df = analyzer.run()
+        except Exception as e:
+            logger.error(f"Error running revenue impact analysis: {e}", exc_info=True)
+            return SkillOutput(
+                final_prompt=f"Error running analysis: {str(e)}",
+                narrative=f"Error: {str(e)}",
+                visualizations=[],
+                parameter_display_descriptions=[]
+            )
+
+        # Create visualization data
+        chart_data = analyzer.create_chart_data(results_df)
+        table_data = analyzer.create_table_data(results_df)
+
+        # Generate insights
+        ar_utils = ArUtils()
+        facts = [{
+            'metric': 'Gross Revenue',
+            'scenario': f"{spend_type.title()} spend: {spend_change_pct:+.0%}",
+            'multiplier': revenue_multiplier,
+            'breakout': breakout,
+            'results': results_df.to_dict(orient='records')
+        }]
+
+        insight_prompt_rendered = jinja2.Template(parameters.arguments.insight_prompt).render(facts=facts)
+        max_response_prompt = jinja2.Template(parameters.arguments.max_prompt).render(facts=facts)
+        insights = ar_utils.get_llm_response(insight_prompt_rendered)
+
+        # Prepare layout variables
+        layout_vars = {
+            "header_title": "Revenue Impact What-If Analysis",
+            "header_subtitle": f"{spend_type.title()} Spend: {spend_change_pct:+.0%} | Revenue Multiplier: {revenue_multiplier}x",
+            "chart_title": f"Gross Revenue: Forecasted vs Estimated",
+            "chart_categories": chart_data['categories'],
+            "chart_data_series": chart_data['series'],
+            "data": table_data['data'],
+            "col_defs": table_data['columns']
+        }
+
+        rendered_layout = wire_layout(json.loads(whatif_layout), layout_vars)
+
+        param_info = [
+            ParameterDisplayDescription(key="Analysis Type", value="Revenue Impact"),
+            ParameterDisplayDescription(key=f"{spend_type.title()} Spend Change", value=f"{spend_change_pct:+.0%}"),
+            ParameterDisplayDescription(key="Revenue Multiplier", value=f"{revenue_multiplier}x"),
+            ParameterDisplayDescription(key="Period", value=periods[0] if periods else "N/A"),
+            ParameterDisplayDescription(key="Breakout", value=breakout)
+        ]
+
+        return SkillOutput(
+            final_prompt=max_response_prompt,
+            narrative=insights,
+            visualizations=[SkillVisualization(title="Revenue Impact Analysis", layout=rendered_layout)],
+            parameter_display_descriptions=param_info,
+            export_data=[ExportData(name="Revenue Impact Analysis", data=results_df)]
         )
 
     else:
@@ -558,8 +714,13 @@ def whatif_analysis(parameters: SkillInput):
 
     insights = ar_utils.get_llm_response(insight_prompt_rendered)
 
+    # Build scenario description for header
+    scenario_desc = ', '.join([f'{k}: {v:+.1%}' for k, v in price_scenario.items()])
+
     # Prepare layout variables
     layout_vars = {
+        "header_title": f"{metric_display} What-If Analysis",
+        "header_subtitle": f"Scenario: {scenario_desc}",
         "chart_title": f"{metric_display}: Forecasted vs Estimated",
         "chart_categories": chart_data['categories'],
         "chart_data_series": chart_data['series'],
@@ -932,6 +1093,223 @@ class MarketShareWhatIfEngine:
             {'name': self.breakout.replace('_', ' ').title()},
             {'name': 'Forecasted', 'headerGroup': 'Market Share'},
             {'name': 'Estimated', 'headerGroup': 'Market Share'},
+            {'name': 'Change'}
+        ]
+
+        data = []
+        for _, row in df.iterrows():
+            data.append([
+                row[self.breakout],
+                row['Forecasted_Display'],
+                row['Estimated_Display'],
+                row['Change_Display']
+            ])
+
+        return {'columns': columns, 'data': data}
+
+
+class RevenueImpactEngine:
+    """Engine for revenue impact analysis - models how spend changes affect revenue"""
+
+    def __init__(self, client, periods, breakout, filters, spend_change_pct, spend_type,
+                 revenue_multiplier=3.0, cannibalization_factor=0.5, table_name=None):
+        self.client = client
+        self.periods = periods
+        self.breakout = breakout
+        self.filters = filters
+        self.spend_change_pct = spend_change_pct
+        self.spend_type = spend_type
+        self.revenue_multiplier = revenue_multiplier
+        self.cannibalization_factor = cannibalization_factor
+        self.table_name = table_name
+
+        # If table_name is provided, try to get database_id from env (for local testing)
+        # Otherwise get from platform context
+        if self.table_name and os.environ.get('DATABASE_ID'):
+            self.database_id = os.environ.get('DATABASE_ID')
+            self.dataset_id = os.environ.get('DATASET_ID')
+        else:
+            # Get database_id and dataset_id from platform context
+            self.dataset_id = get_dataset_id()
+            dataset = self.client.data.get_dataset(dataset_id=self.dataset_id)
+            self.database_id = dataset.database.database_id
+
+            # Get table name from dataset's fact entity if not provided
+            if not self.table_name:
+                domain_entity = next((x for x in dataset.domain_objects if x.type == "factEntity"), None)
+                if domain_entity and hasattr(domain_entity, 'db_table'):
+                    self.table_name = domain_entity.db_table
+                else:
+                    self.table_name = getattr(dataset, 'name', None) or 'data'
+
+    def run(self):
+        """Run revenue impact analysis"""
+        # Pull current revenue data
+        revenue_df = self._pull_revenue_data()
+
+        # Calculate estimated revenue after spend change
+        results_df = self._calculate_revenue_impact(revenue_df)
+
+        return results_df
+
+    def _pull_revenue_data(self):
+        """Pull gross revenue data from database"""
+        # Parse period to date range
+        if self.periods and len(self.periods) > 0:
+            period_str = self.periods[0]
+            start_date, end_date = self._parse_period_to_date_range(period_str)
+            logger.info(f"Revenue impact analysis - Parsed period '{period_str}' to date range: {start_date} to {end_date}")
+        else:
+            raise ValueError("Period is required but was not provided")
+
+        # Build filter clause
+        filter_clauses = []
+        for f in self.filters:
+            dim = f.get('dim') or f.get('col')
+            val = f.get('val')
+            if dim and val:
+                if isinstance(val, list):
+                    val_str = ", ".join([f"UPPER('{v}')" for v in val])
+                    filter_clauses.append(f"UPPER({dim}) IN ({val_str})")
+                else:
+                    filter_clauses.append(f"UPPER({dim}) = UPPER('{val}')")
+
+        filter_clause = " AND " + " AND ".join(filter_clauses) if filter_clauses else ""
+
+        # Query gross_revenue by breakout dimension
+        query = f"""
+        SELECT {self.breakout}, SUM(gross_revenue) as gross_revenue
+        FROM {self.table_name}
+        WHERE start_date BETWEEN '{start_date}' AND '{end_date}'
+        {filter_clause}
+        GROUP BY {self.breakout}
+        """
+
+        logger.info(f"Revenue impact query: {query}")
+        result = self.client.data.execute_sql_query(
+            database_id=self.database_id,
+            sql_query=query,
+            row_limit=10000
+        )
+
+        df = result.df if hasattr(result, 'df') else None
+        if df is None or df.empty:
+            raise ValueError(
+                f"No revenue data available for {self.periods[0]}. "
+                f"Please try a different time period or check your filter selections."
+            )
+
+        return df
+
+    def _calculate_revenue_impact(self, df):
+        """Calculate revenue impact based on spend change and multiplier
+
+        Model:
+        - Target brand: revenue increases by spend_change * revenue_multiplier
+        - Competitors: revenue decreases by (target_gain * cannibalization_factor)
+        """
+        df = df.copy()
+
+        # Current revenue (forecasted)
+        df['Forecasted'] = df['gross_revenue']
+
+        # Calculate revenue change
+        # spend_change_pct * revenue_multiplier = revenue change %
+        # e.g., 25% spend increase * 3.0 multiplier = 75% revenue increase
+        revenue_change_pct = self.spend_change_pct * self.revenue_multiplier
+
+        # For now, apply to all brands in the breakout
+        # In a more sophisticated model, you'd identify the target brand and apply cannibalization to others
+        # For this implementation: first brand gets the boost, others get cannibalized
+        df['is_target'] = False
+        if len(df) > 0:
+            df.iloc[0, df.columns.get_loc('is_target')] = True
+
+        df['Estimated'] = df.apply(
+            lambda row: row['Forecasted'] * (1 + revenue_change_pct) if row['is_target']
+            else row['Forecasted'] * (1 - revenue_change_pct * self.cannibalization_factor),
+            axis=1
+        )
+
+        # Change calculation
+        df['Change'] = (df['Estimated'] - df['Forecasted']) / df['Forecasted']
+
+        # Format for display
+        df['Forecasted_Display'] = df['Forecasted'].apply(lambda x: f"${x/1000000:.2f}M")
+        df['Estimated_Display'] = df['Estimated'].apply(lambda x: f"${x/1000000:.2f}M")
+        df['Change_Display'] = df['Change'].apply(lambda x: f"{x:+.1%}")
+
+        logger.info(f"Revenue impact calculated: spend_change={self.spend_change_pct:+.0%}, multiplier={self.revenue_multiplier}x, revenue_change={revenue_change_pct:+.0%}")
+
+        return df
+
+    def _parse_period_to_date_range(self, period_str):
+        """Convert period string to date range for SQL query"""
+        import re
+        from dateutil.parser import parse
+        from calendar import monthrange
+
+        if not period_str:
+            raise ValueError("Period is required but was not provided")
+
+        period_lower = period_str.lower().strip()
+
+        # Handle quarters (Q1 2024, Q2 2025, etc.)
+        quarter_match = re.match(r'q(\d)\s+(\d{4})', period_lower)
+        if quarter_match:
+            quarter = int(quarter_match.group(1))
+            year = int(quarter_match.group(2))
+
+            quarter_map = {
+                1: ('01-01', '03-31'),
+                2: ('04-01', '06-30'),
+                3: ('07-01', '09-30'),
+                4: ('10-01', '12-31')
+            }
+            start_month_day, end_month_day = quarter_map[quarter]
+            return f"{year}-{start_month_day}", f"{year}-{end_month_day}"
+
+        # Handle year-only periods
+        year_match = re.match(r'^(\d{4})$', period_lower)
+        if year_match:
+            year = int(year_match.group(1))
+            return f"{year}-01-01", f"{year}-12-31"
+
+        # Handle single months
+        try:
+            parsed_date = parse(period_str, fuzzy=True)
+            year = parsed_date.year
+            month = parsed_date.month
+            _, last_day = monthrange(year, month)
+            return f"{year}-{month:02d}-01", f"{year}-{month:02d}-{last_day}"
+        except:
+            return period_str, period_str
+
+    def create_chart_data(self, df):
+        """Create chart data for revenue impact visualization"""
+        categories = df[self.breakout].tolist()
+
+        series = [
+            {
+                'name': 'Gross Revenue Forecasted',
+                'data': df['Forecasted'].round(2).tolist(),
+                'color': '#5DADE2'
+            },
+            {
+                'name': 'Gross Revenue Estimated',
+                'data': df['Estimated'].round(2).tolist(),
+                'color': '#8E44AD'
+            }
+        ]
+
+        return {'categories': categories, 'series': series}
+
+    def create_table_data(self, df):
+        """Create table data for revenue impact visualization"""
+        columns = [
+            {'name': self.breakout.replace('_', ' ').title()},
+            {'name': 'Forecasted', 'headerGroup': 'Gross Revenue'},
+            {'name': 'Estimated', 'headerGroup': 'Gross Revenue'},
             {'name': 'Change'}
         ]
 
