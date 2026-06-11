@@ -363,13 +363,23 @@ def _format_metric_name(metric: str) -> str:
         ),
         SkillParameter(
             name="price_change_scenario",
-            description="For cost_impact analysis: JSON object with component changes as decimal percentages. For COGS: 'cocoa', 'sugar', 'wheat', 'material', 'labor', 'overheads', 'logistics'. For Marketing: 'digital', 'traditional', 'trade', 'brand'. Example: {'cocoa': 0.05}."
+            description="For cost_impact and revenue_impact: JSON object with spend changes as decimal percentages. Example: {'marketing': 0.25} for 25% marketing increase."
+        ),
+        SkillParameter(
+            name="brand_filter",
+            description="Brand to filter on (e.g., 'DolceVita'). For revenue_impact, this is the TARGET brand that gets the marketing boost.",
+            default_value=None
+        ),
+        SkillParameter(
+            name="category_filter",
+            description="Category to filter on (e.g., 'Biscuits'). Limits analysis to brands within this category.",
+            default_value=None
         ),
         SkillParameter(
             name="other_filters",
             constrained_to="filters",
             is_multi=True,
-            description="Additional filters (region, category, etc.)"
+            description="Additional filters (region, etc.)"
         ),
         SkillParameter(
             name="whatif_layout",
@@ -401,13 +411,23 @@ def whatif_analysis(parameters: SkillInput):
     print(f"Skill received following parameters: {parameters.arguments}")
 
     # Parse parameters
-    analysis_type = getattr(parameters.arguments, 'analysis_type', 'cost_impact') or 'cost_impact'
-    metric = parameters.arguments.metric if hasattr(parameters.arguments, 'metric') and parameters.arguments.metric else 'cogs'
+    analysis_type = getattr(parameters.arguments, 'analysis_type', 'revenue_impact') or 'revenue_impact'
+    metric = parameters.arguments.metric if hasattr(parameters.arguments, 'metric') and parameters.arguments.metric else 'gross_revenue'
     periods = parameters.arguments.periods if hasattr(parameters.arguments, 'periods') else []
-    breakout = parameters.arguments.breakout if hasattr(parameters.arguments, 'breakout') else 'category'
+    breakout = parameters.arguments.breakout if hasattr(parameters.arguments, 'breakout') else 'brand'
     other_filters = parameters.arguments.other_filters if hasattr(parameters.arguments, 'other_filters') else []
     whatif_layout = parameters.arguments.whatif_layout if hasattr(parameters.arguments, 'whatif_layout') else WHATIF_LAYOUT
     table_name = parameters.arguments.table_name if hasattr(parameters.arguments, 'table_name') and parameters.arguments.table_name else None
+
+    # Get explicit brand/category filters (workaround for platform eq operator issue)
+    brand_filter = getattr(parameters.arguments, 'brand_filter', None)
+    category_filter = getattr(parameters.arguments, 'category_filter', None)
+
+    # Add explicit filters to other_filters list
+    if category_filter:
+        other_filters = list(other_filters) if other_filters else []
+        other_filters.append({'dim': 'category', 'val': [category_filter], 'op': '='})
+    # Note: brand_filter is used differently - it's the TARGET brand for revenue impact, not a filter
 
     # Market share specific parameters
     price_change_pct = getattr(parameters.arguments, 'price_change_pct', None)
@@ -576,7 +596,8 @@ def whatif_analysis(parameters: SkillInput):
             spend_type=spend_type or 'marketing',
             revenue_multiplier=revenue_multiplier,
             cannibalization_factor=cannibalization_factor,
-            table_name=table_name
+            table_name=table_name,
+            target_brand=brand_filter  # The brand getting the marketing boost
         )
 
         # Run revenue impact analysis
@@ -1112,7 +1133,7 @@ class RevenueImpactEngine:
     """Engine for revenue impact analysis - models how spend changes affect revenue"""
 
     def __init__(self, client, periods, breakout, filters, spend_change_pct, spend_type,
-                 revenue_multiplier=3.0, cannibalization_factor=0.5, table_name=None):
+                 revenue_multiplier=3.0, cannibalization_factor=0.5, table_name=None, target_brand=None):
         self.client = client
         self.periods = periods
         self.breakout = breakout
@@ -1122,6 +1143,7 @@ class RevenueImpactEngine:
         self.revenue_multiplier = revenue_multiplier
         self.cannibalization_factor = cannibalization_factor
         self.table_name = table_name
+        self.target_brand = target_brand  # The brand getting the marketing boost
 
         # If table_name is provided, try to get database_id from env (for local testing)
         # Otherwise get from platform context
@@ -1218,12 +1240,17 @@ class RevenueImpactEngine:
         # e.g., 25% spend increase * 3.0 multiplier = 75% revenue increase
         revenue_change_pct = self.spend_change_pct * self.revenue_multiplier
 
-        # For now, apply to all brands in the breakout
-        # In a more sophisticated model, you'd identify the target brand and apply cannibalization to others
-        # For this implementation: first brand gets the boost, others get cannibalized
-        df['is_target'] = False
-        if len(df) > 0:
-            df.iloc[0, df.columns.get_loc('is_target')] = True
+        # Identify target brand - use explicit target_brand if provided, otherwise first row
+        if self.target_brand:
+            # Match target brand (case-insensitive)
+            df['is_target'] = df[self.breakout].str.upper() == self.target_brand.upper()
+            logger.info(f"Target brand set to: {self.target_brand}")
+        else:
+            # Fallback: first brand gets the boost
+            df['is_target'] = False
+            if len(df) > 0:
+                df.iloc[0, df.columns.get_loc('is_target')] = True
+            logger.info(f"No target brand specified, using first row as target")
 
         df['Estimated'] = df.apply(
             lambda row: row['Forecasted'] * (1 + revenue_change_pct) if row['is_target']
@@ -1239,7 +1266,7 @@ class RevenueImpactEngine:
         df['Estimated_Display'] = df['Estimated'].apply(lambda x: f"${x/1000000:.2f}M")
         df['Change_Display'] = df['Change'].apply(lambda x: f"{x:+.1%}")
 
-        logger.info(f"Revenue impact calculated: spend_change={self.spend_change_pct:+.0%}, multiplier={self.revenue_multiplier}x, revenue_change={revenue_change_pct:+.0%}")
+        logger.info(f"Revenue impact calculated: target={self.target_brand}, spend_change={self.spend_change_pct:+.0%}, multiplier={self.revenue_multiplier}x, revenue_change={revenue_change_pct:+.0%}")
 
         return df
 
