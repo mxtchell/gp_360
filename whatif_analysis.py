@@ -307,26 +307,26 @@ def _format_metric_name(metric: str) -> str:
 
 @skill(
     name="FP&A What-If Analysis",
-    llm_name="What-If Scenario Analysis - Revenue, Market Share, and Cost Impact",
-    description="USE THIS SKILL for 'what will be the impact' questions. Supports THREE analysis types: (1) revenue_impact - how marketing/spend changes affect revenue, (2) market_share - how price changes affect market share, (3) cost_impact - how cost changes affect expenses. Run ONCE per question.",
-    capabilities="REVENUE IMPACT: Model how marketing spend changes affect gross revenue (e.g., 25% marketing increase → revenue growth with competitor cannibalization). MARKET SHARE IMPACT: Model how price changes affect market share using elasticity. COST IMPACT: Model how cost component changes affect total costs.",
-    limitations="Run this skill ONCE per question. Choose the appropriate analysis_type based on the question.",
-    example_questions="What will be the impact on revenue if we increase marketing spend by 25%? What will be the impact on biscuits if we increase marketing spend on DolceVita by 25%? How would a 10% price increase affect market share? What happens to COGS if cocoa prices increase 5%?",
-    parameter_guidance="FOR REVENUE/SALES IMPACT FROM SPEND CHANGES: Use analysis_type='revenue_impact', set price_change_scenario (e.g., {'marketing': 0.25}). FOR MARKET SHARE IMPACT: Use analysis_type='market_share', set price_change_pct. FOR COST IMPACT: Use analysis_type='cost_impact'. IMPORTANT: Use 'Q1 2026' for latest data.",
+    llm_name="What-If Scenario Analysis - Revenue Impact from Marketing Spend",
+    description="USE THIS SKILL for 'what will be the impact' questions about marketing spend changes. PRIMARY USE: Model how increasing/decreasing marketing spend on a brand affects GROSS REVENUE across all brands (with cannibalization). Also supports market_share and cost_impact analysis types.",
+    capabilities="REVENUE IMPACT (DEFAULT): When user asks 'what is the impact if we increase marketing spend on [Brand]', model how that affects GROSS REVENUE for ALL brands - target brand gets revenue boost, competitors get cannibalized. MARKET SHARE: Price change effects. COST IMPACT: Cost component changes.",
+    limitations="Run this skill ONCE per question. For marketing spend impact questions, ALWAYS use analysis_type='revenue_impact' and breakout='brand'.",
+    example_questions="What will be the impact on biscuits if we increase marketing spend on DolceVita by 25%? What is the revenue impact if we boost marketing for Truffle? How would a 10% price increase affect market share?",
+    parameter_guidance="CRITICAL: For 'impact of marketing spend' questions: (1) analysis_type='revenue_impact', (2) breakout='brand' to show brand-level effects, (3) use category filter if question mentions a category. This shows GROSS REVENUE impact, NOT marketing expense impact. FOR COST ANALYSIS ONLY: use analysis_type='cost_impact'. Use 'Q1 2026' for latest data.",
     parameters=[
         SkillParameter(
             name="analysis_type",
             is_multi=False,
-            constrained_values=["cost_impact", "market_share", "revenue_impact"],
-            description="Type of analysis: 'cost_impact' for COGS/expense modeling, 'market_share' for price elasticity impact on market share, 'revenue_impact' for modeling how spend changes affect revenue.",
-            default_value="cost_impact"
+            constrained_values=["revenue_impact", "market_share", "cost_impact"],
+            description="Type of analysis. USE 'revenue_impact' (DEFAULT) for marketing spend impact questions - shows how spend changes affect GROSS REVENUE by brand. Use 'market_share' for price elasticity. Use 'cost_impact' ONLY for COGS/expense modeling questions.",
+            default_value="revenue_impact"
         ),
         SkillParameter(
             name="metric",
             is_multi=False,
             constrained_to="metrics",
-            description="The metric to analyze. For cost_impact: 'cogs', 'marketing_spend'. For market_share: 'gross_revenue_share' or 'units_carton_share'.",
-            default_value="cogs"
+            description="The metric to analyze. For revenue_impact: automatically uses 'gross_revenue'. For cost_impact: 'cogs', 'marketing_expense'. For market_share: 'gross_revenue_share'.",
+            default_value="gross_revenue"
         ),
         SkillParameter(
             name="periods",
@@ -338,8 +338,8 @@ def _format_metric_name(metric: str) -> str:
             name="breakout",
             is_multi=False,
             constrained_to="dimensions",
-            description="Breakout dimension for analysis (e.g., 'category', 'region')",
-            default_value="category"
+            description="Breakout dimension. USE 'brand' for marketing spend impact questions to show brand-level revenue effects. Use 'category' or 'region' for aggregated views.",
+            default_value="brand"
         ),
         SkillParameter(
             name="price_change_pct",
