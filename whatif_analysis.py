@@ -551,7 +551,9 @@ def whatif_analysis(parameters: SkillInput):
             "chart_categories": chart_data['categories'],
             "chart_data_series": chart_data['series'],
             "data": table_data['data'],
-            "col_defs": table_data['columns']
+            "col_defs": table_data['columns'],
+            "yaxis_title": "Market Share",
+            "xaxis_title": breakout.title()
         }
 
         rendered_layout = wire_layout(json.loads(whatif_layout), layout_vars)
@@ -791,7 +793,9 @@ def whatif_analysis(parameters: SkillInput):
         "chart_categories": chart_data['categories'],
         "chart_data_series": chart_data['series'],
         "data": table_data['data'],
-        "col_defs": table_data['columns']
+        "col_defs": table_data['columns'],
+        "yaxis_title": metric_display,
+        "xaxis_title": breakout.title()
     }
 
     # Wire the layout
