@@ -112,9 +112,13 @@ def apply_chart_formatting(charts):
                 # Format as percentage
                 for series in vars_dict[series_key]:
                     if isinstance(series, dict) and 'data' in series:
-                        # Scale to percentage if values are decimals (0.xx)
+                        # Normalize percentage values:
+                        # - If values are decimals (0.xx), multiply by 100
+                        # - If values are already large (>100 or <-100), divide by 100 (likely already *100)
+                        # - Otherwise keep as-is (already in percentage form like 47.17)
                         series['data'] = [
-                            round(val * 100, 2) if val is not None and isinstance(val, (int, float)) and abs(val) < 1 else val
+                            round(val * 100, 2) if val is not None and isinstance(val, (int, float)) and abs(val) < 1 else
+                            (round(val / 100, 2) if val is not None and isinstance(val, (int, float)) and abs(val) > 100 else val)
                             for val in series['data']
                         ]
                         series['tooltip'] = {'pointFormat': '<b>{series.name}</b>: {point.y:,.1f}%<br/>'}
