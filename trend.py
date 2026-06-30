@@ -112,15 +112,32 @@ def apply_chart_formatting(charts):
                 # Format as percentage
                 for series in vars_dict[series_key]:
                     if isinstance(series, dict) and 'data' in series:
-                        # Normalize percentage values:
-                        # - If values are decimals (0.xx), multiply by 100
-                        # - If values are already large (>100 or <-100), divide by 100 (likely already *100)
-                        # - Otherwise keep as-is (already in percentage form like 47.17)
-                        series['data'] = [
-                            round(val * 100, 2) if val is not None and isinstance(val, (int, float)) and abs(val) < 1 else
-                            (round(val / 100, 2) if val is not None and isinstance(val, (int, float)) and abs(val) > 100 else val)
-                            for val in series['data']
-                        ]
+                        # Helper to normalize percentage values
+                        def normalize_pct(val):
+                            if val is None or not isinstance(val, (int, float)):
+                                return val
+                            if abs(val) < 1:
+                                return round(val * 100, 2)
+                            elif abs(val) > 100:
+                                return round(val / 100, 2)
+                            return val
+
+                        # Transform data - handle both simple values and {x, y} objects
+                        new_data = []
+                        for item in series['data']:
+                            if isinstance(item, dict) and 'y' in item:
+                                item = dict(item)  # copy
+                                item['y'] = normalize_pct(item['y'])
+                                new_data.append(item)
+                            else:
+                                new_data.append(normalize_pct(item))
+                        series['data'] = new_data
+
+                        # Also fix dataLabels format if present
+                        if 'dataLabels' not in series:
+                            series['dataLabels'] = {}
+                        series['dataLabels']['format'] = '{y:,.1f}%'
+
                         series['tooltip'] = {'pointFormat': '<b>{series.name}</b>: {point.y:,.1f}%<br/>'}
 
                 if y_axis_key in vars_dict:
