@@ -134,7 +134,7 @@ def apply_chart_formatting(charts):
                         series['data'] = new_data
 
                         # Also fix dataLabels format if present
-                        if 'dataLabels' not in series:
+                        if 'dataLabels' not in series or not isinstance(series['dataLabels'], dict):
                             series['dataLabels'] = {}
                         series['dataLabels']['format'] = '{y:,.1f}%'
 
